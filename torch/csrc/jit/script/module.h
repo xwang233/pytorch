@@ -178,7 +178,7 @@ struct TORCH_API Module : public Object {
     train(/*on=*/false);
   }
   /// True if the module is in training mode.
-  bool is_training() {
+  bool is_training() const {
     return attr("training", true).toBool();
   }
 
@@ -222,10 +222,10 @@ struct TORCH_API Module : public Object {
       const std::string& filename,
       const ExtraFilesMap& extra_files = ExtraFilesMap()) const;
 
-  // Clones both the underlying `ClassType` and the module instance(data), this function
-  // creates a new `ClassType` and returns a new instance that has the same data
-  // as the current instance but with the new type, shared ClassType will be
-  // preserved as well
+  // Clones both the underlying `ClassType` and the module instance(data), this
+  // function creates a new `ClassType` and returns a new instance that has the
+  // same data as the current instance but with the new type, shared ClassType
+  // will be preserved as well
   Module clone() const;
 
   // Clones the module instance but shares the underlying type with the
@@ -366,7 +366,8 @@ struct slot_iterator_impl {
   // is the current position of the iterator a valid one?
   // otherwise, we have to continue advancing.
   bool valid() const {
-    return top().i_ < int64_t(top().module_._ivalue()->type()->numAttributes()) &&
+    return top().i_ <
+        int64_t(top().module_._ivalue()->type()->numAttributes()) &&
         Policy::valid(top().module_._ivalue()->type(), top().i_);
   }
   void while_not_valid_next() {

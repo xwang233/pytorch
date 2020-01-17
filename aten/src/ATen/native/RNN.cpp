@@ -195,6 +195,52 @@ struct QuantizedCellParamsDynamic {
   }
 };
 
+struct QuantizedCellParamsStatic {
+  QuantizedCellParamsStatic(const Tensor& _packed_w_ih,
+                            const Tensor& _packed_w_hh)
+    : packed_w_ih(_packed_w_ih), packed_w_hh(_packed_w_hh) {};
+
+  // use linear_prepack to get the packed weights.
+  const Tensor& packed_w_ih;
+  const Tensor& packed_w_hh;
+
+  // Assume [-8, 8] range
+  static constexpr float kQ8BitScaleWithRange16 = 0.0625;
+  static constexpr int kQ8BitZeroPoint = 128;
+
+  Tensor matmul_ih(Tensor input) const {
+    TORCH_CHECK(false, "matmul is not supported with quantized cell params");
+  }
+  Tensor matmul_hh(Tensor h) const {
+    TORCH_CHECK(false, "matmul is not supported with quantized cell params");
+  }
+  Tensor linear_ih(Tensor input) const {
+    const auto kFuncName = "quantized::linear";
+    const auto kOvrldName = "";
+    const std::vector<c10::IValue> output_ih_list =
+        callOp(kFuncName, kOvrldName, input, packed_w_ih,
+               kQ8BitScaleWithRange16, kQ8BitZeroPoint);
+    TORCH_INTERNAL_ASSERT(
+        output_ih_list.size() == 1,
+        "The output vector should have exactly one element");
+    const Tensor output_ih = output_ih_list[0].toTensor();
+    return output_ih;
+  }
+  Tensor linear_hh(Tensor h) const {
+    const auto kFuncName = "quantized::linear";
+    const auto kOvrldName = "";
+    const std::vector<c10::IValue> output_hh_list =
+        callOp(kFuncName, kOvrldName, h, packed_w_hh,
+               kQ8BitScaleWithRange16, kQ8BitZeroPoint);
+    TORCH_INTERNAL_ASSERT(
+        output_hh_list.size() == 1,
+        "The output vector should have exactly one element");
+    const Tensor output_hh = output_hh_list[0].toTensor();
+    return output_hh;
+  }
+};
+
+
 struct QuantizedCellParamsFP16 {
   QuantizedCellParamsFP16(const Tensor &_packed_ih, const Tensor &_packed_hh,
                           const Tensor &_b_ih, const Tensor &_b_hh)
@@ -297,6 +343,20 @@ static std::vector<QuantizedCellParamsDynamic> gather_quantized_params_dynamic(
 #else // USE_FBGEMM
   TORCH_INTERNAL_ASSERT(false, "Tried to use quantized RNN wihtout FBGEMM!")
 #endif // USE_FBGEMM
+}
+
+static std::vector<QuantizedCellParamsStatic> gather_quantized_params_static(
+    TensorList params) {
+  static at::Tensor undefined;
+  std::vector<QuantizedCellParamsStatic> result;
+  TORCH_CHECK(params.size() % 2 == 0,
+              "Got an incorrect number of quantized RNN parameters. ",
+              "Expecting multiple of 2, got ", params.size());
+  for (size_t i = 0; i < params.size(); i += 2) {
+    // packed wb_ih and wb_hh
+    result.emplace_back(params[i], params[i + 1]);
+  }
+  return result;
 }
 
 static std::vector<QuantizedCellParamsFP16> gather_quantized_params_fp16(
@@ -408,7 +468,6 @@ struct LSTMCell : Cell<std::tuple<Tensor, Tensor>, cell_params> {
       // Slice off the workspace argument (it's needed only for AD).
       return std::make_tuple(std::move(std::get<0>(result)), std::move(std::get<1>(result)));
     }
-
     const auto gates = params.linear_hh(hx).add_(
         pre_compute_input ? input : params.linear_ih(input));
     auto chunked_gates = gates.chunk(4, 1);
@@ -420,7 +479,95 @@ struct LSTMCell : Cell<std::tuple<Tensor, Tensor>, cell_params> {
     auto hy = outgate * cy.tanh();
     return std::make_tuple(std::move(hy), std::move(cy));
   }
+};
 
+struct qLSTMCell : Cell<std::tuple<Tensor, Tensor>, QuantizedCellParamsStatic> {
+  using hidden_type = std::tuple<Tensor, Tensor>;
+
+  // constants for different ranges.
+  static constexpr float kQ8BitScaleWithRange2 = 2.0f / 256.0f;
+  static constexpr float kQ8BitScaleWithRange16 = 16.0f / 256.0f;
+  static constexpr float kQ32BitScaleWithRange256 = 256.0f / uint32_t(-1);
+  static constexpr int32_t kQZeroPoint = 128;
+
+  hidden_type operator()(
+      const Tensor& input,
+      const hidden_type& hidden,
+      const QuantizedCellParamsStatic& params,
+      bool pre_compute_input = false) const override {
+    const auto& hx = std::get<0>(hidden);
+    const auto& cx = std::get<1>(hidden);
+
+    // quantization `add` expects the inputs to be of the same shape.
+    // i@w_ih shape: [batch_num, 4*hsize]
+    // h@w_hh shape: [num_layers*num_directions, batch_num, 4*hsize]
+    // need to `expand` the input.
+    // Note: we don't want to use `repeat`, to avoid the copy
+    const auto _input = pre_compute_input ? input : params.linear_ih(input);
+    const auto h_w_hh = params.linear_hh(hx);
+    const auto i_w_ih = _input.expand({hx.size(0), -1});
+    const auto gates = elementwise_arithmetic("quantized::add_out",
+                                              i_w_ih, h_w_hh,
+                                              kQ8BitScaleWithRange2,
+                                              kQZeroPoint);
+
+    auto chunked_gates = gates.chunk(4, 1);
+    auto ingate = at::sigmoid(chunked_gates[0]);
+    auto forgetgate = at::sigmoid(chunked_gates[1]);
+    auto cellgate = at::tanh(chunked_gates[2]);
+    auto outgate = at::sigmoid(chunked_gates[3]);
+
+    auto in_cell = elementwise_arithmetic("quantized::mul_out",
+                                          ingate, cellgate,
+                                          kQ8BitScaleWithRange2,
+                                          kQZeroPoint);
+    auto d_in_cell = in_cell.dequantize();
+    auto d_forgetgate = forgetgate.dequantize();
+    auto d_cx = cx.dequantize();
+
+    auto f_cy = (d_forgetgate * d_cx) + d_in_cell;
+    auto cy = at::quantize_per_tensor(f_cy, kQ32BitScaleWithRange256,
+                                      kQZeroPoint,
+                                      at::kQInt32);
+    auto hy = elementwise_arithmetic("quantized::mul_out",
+                                     outgate, at::tanh(cy),
+                                     kQ8BitScaleWithRange2,
+                                     kQZeroPoint);
+    return std::make_tuple(std::move(hy), std::move(cy));
+  }
+
+private:
+  Tensor elementwise_arithmetic(const char* function_name,
+                                Tensor qa, Tensor qb,
+                                Scalar out_scale, Scalar out_zero_point) const {
+    static constexpr ScalarType qtype = at::kQUInt8;
+    auto rqa = demoting_requantization(qa, out_scale, out_zero_point, qtype);
+    auto rqb = demoting_requantization(qb, out_scale, out_zero_point, qtype);
+
+    Tensor out = at::_empty_affine_quantized(rqa.sizes(),
+      at::device(at::kCPU).dtype(qtype),
+                 out_scale.toDouble(),
+                 out_zero_point.toLong());
+    callOp(function_name, "", rqa, rqb, out);
+    return out;
+  }
+
+  // Demotes from qint32 to qint8
+  Tensor demoting_requantization(Tensor qa, Scalar out_scale,
+                                 Scalar out_zero_point, ScalarType qtype) const {
+    // TODO: Need to optimize this part.
+    if (qa.scalar_type() == at::kQUInt8) {
+      auto dqa = qa.dequantize();
+      auto qqa = at::quantize_per_tensor(dqa, out_scale.toDouble(), out_zero_point.toLong(), qtype);
+      return qqa;
+    }
+    if (qa.scalar_type() != at::kQInt32) {
+      return qa;
+    }
+    auto dqa = qa.dequantize();
+    auto qqa = at::quantize_per_tensor(dqa, out_scale.toDouble(), out_zero_point.toLong(), qtype);
+    return qqa;
+  }
 };
 
 template <typename cell_params>
@@ -822,6 +969,35 @@ std::tuple<io_type, Tensor, Tensor> _lstm_impl(
   return std::make_tuple(std::move(result.outputs), at::stack(hy, 0), at::stack(cy, 0));
 }
 
+template<template<typename,typename> class LayerT, template<typename,typename> class BidirLayerT, typename io_type>
+std::tuple<io_type, Tensor, Tensor> _qlstm_impl(
+      const io_type& input,
+      const std::vector<QuantizedCellParamsStatic>& params,
+      const Tensor& hx, const Tensor& cx,
+      int64_t num_layers, double dropout_p, bool train, bool bidirectional) {
+  // It's much more useful for us to work on lists of pairs of hx and cx for each layer, so we need
+  // to transpose a pair of those tensors.
+  auto layer_hx = hx.unbind(0);
+  auto layer_cx = cx.unbind(0);
+  int64_t total_layers = layer_hx.size();
+  std::vector<typename qLSTMCell::hidden_type> hiddens;
+  hiddens.reserve(total_layers);
+  for (int64_t i = 0; i < total_layers; ++i) {
+    hiddens.emplace_back(std::move(layer_hx[i]), std::move(layer_cx[i]));
+  }
+  auto result = _rnn_impl<qLSTMCell, LayerT, BidirLayerT>(input, params, hiddens, num_layers, dropout_p, train, bidirectional);
+  // Now, we need to reverse the transposed we performed above.
+  std::vector<Tensor> hy, cy;
+  hy.reserve(total_layers);
+  cy.reserve(total_layers);
+  for (auto & hidden : result.final_hidden) {
+    hy.push_back(std::move(std::get<0>(hidden)));
+    cy.push_back(std::move(std::get<1>(hidden)));
+  }
+
+  return std::make_tuple(std::move(result.outputs), at::stack(hy, 0), at::stack(cy, 0));
+}
+
 } // anonymous namespace
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1164,11 +1340,17 @@ std::tuple<Tensor, Tensor, Tensor> quantized_lstm(
   TORCH_CHECK(has_biases, "quantized LSTM requires biases");
   TORCH_CHECK(
       result_dtype == at::kChar || result_dtype == at::kQInt8 ||
-          result_dtype == at::kHalf,
+          result_dtype == at::kQUInt8 || result_dtype == at::kHalf,
       "dtype is not supported");
 
   std::tuple<Tensor, Tensor, Tensor> results;
-  if (result_dtype == at::kChar || result_dtype == at::kQInt8) {
+  if (result_dtype == at::kQUInt8 && !use_dynamic) {
+    // Use static here
+    auto params = gather_quantized_params_static(_params);
+    results = _qlstm_impl<FullLayer, FullBidirectionalLayer>(
+      input, params, hx[0], hx[1], num_layers,
+          dropout_p, train, bidirectional);
+  } else if (result_dtype == at::kChar || result_dtype == at::kQInt8) {
     if (use_dynamic) {
       auto params = gather_quantized_params_dynamic(_params);
       results = _lstm_impl<FullLayer, FullBidirectionalLayer>(

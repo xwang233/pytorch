@@ -153,6 +153,11 @@ inline InferredType tryToInferType(py::handle input) {
     return InferredType(IntType::get());
   }
 
+  if (py::isinstance<script::Object>(input)) {
+    auto object = py::cast<script::Object>(input);
+    return InferredType(object.type());
+  }
+
   // Try container types
   return tryToInferContainerType(input);
 }

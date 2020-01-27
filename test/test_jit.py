@@ -4934,22 +4934,6 @@ def foo(x):
 
     @skipIfRocm
     @unittest.skipIf(IS_WINDOWS, "TODO: Fix this test case")
-    def test_torchbind_getstate_setstate(self):
-        def f():
-            val = torch.classes._TorchScriptTesting_StackString(["3", "5"])
-            s = val.__getstate__()
-            # TODO: sort out whether unpickler should call __new__ or __init__
-            val2 = torch.classes._TorchScriptTesting_StackString(["0", "0"])
-            val2.__setstate__(s)
-            return val.pop(), val2.pop()
-        ret = f()
-        self.assertEqual(ret[0], ret[1])
-
-        ret = torch.jit.script(f)()
-        self.assertEqual(ret[0], ret[1])
-
-    @skipIfRocm
-    @unittest.skipIf(IS_WINDOWS, "TODO: Fix this test case")
     def test_torchbind_return_tuple(self):
         def f():
             val = torch.classes._TorchScriptTesting_StackString(["3", "5"])
@@ -4980,6 +4964,24 @@ def foo(x):
 
         scripted = torch.jit.script(foo)
         self.assertEqual(scripted(), "mom")
+
+    @skipIfRocm
+    @unittest.skipIf(IS_WINDOWS, "TODO: Fix this test case")
+    def test_torchbind_class_attribute(self):
+        class FooBar1234(torch.nn.Module):
+            def __init__(self):
+                super(FooBar1234, self).__init__()
+                self.f = torch.classes._TorchScriptTesting_StackString(["3", "4"])
+
+            def forward(self):
+                return self.f.top()
+
+        inst = FooBar1234()
+        scripted = torch.jit.script(inst)
+        eic = self.getExportImportCopy(scripted)
+        assert eic() == "deserialized"
+        for expected in ["deserialized", "was", "i"]:
+            assert eic.f.pop() == expected
 
     def test_jitter_bug(self):
         @torch.jit.script

@@ -287,8 +287,9 @@ class OwnerRRef final : public RRef {
 
   // Has a value been set?
   bool hasValue() const;
-  // Gets a future that is satisfied when the value is set.
-  std::shared_ptr<FutureMessage> getFuture();
+  // Register a callback for being invoked, when setValue() is called.
+  // If hasValue() is already true, the callback will be invoked in-place.
+  void addCallback(const utils::Future<IValue>::Callback& callback);
 
  private:
   friend class RRefContext;
@@ -300,15 +301,17 @@ class OwnerRRef final : public RRef {
       worker_id_t ownerId,
       const RRefId& rrefId,
       TypePtr type,
-      c10::optional<IValue> value)
+      c10::optional<IValue> optionalValue)
       : RRef(ownerId, rrefId, std::move(type)) {
-    value_ = std::move(value);
+    if (optionalValue) {
+      futureValuePtr_->markCompleted(std::move(optionalValue).value());
+    }
   }
 
-  c10::optional<IValue> value_;
-  mutable std::mutex mutex_;
-  mutable std::condition_variable valueCV_;
-  std::shared_ptr<FutureMessage> future_;
+  mutable std::mutex futureValuePtrMutex_;
+  mutable std::condition_variable futureValueCompletedCV_;
+  std::shared_ptr<torch::utils::Future<IValue>> futureValuePtr_ =
+      std::make_shared<torch::utils::Future<IValue>>();
 };
 
 } // namespace rpc

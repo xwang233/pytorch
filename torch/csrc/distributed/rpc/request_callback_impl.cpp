@@ -160,22 +160,21 @@ std::shared_ptr<FutureMessage> RequestCallbackImpl::processRpc(
       if (rref->hasValue()) { // optional fast-path
         return wrap(ScriptRRefFetchRet({rref->getValue()}).toMessage());
       }
-      auto whenValueSet = rref->getFuture();
+
       auto responseFuture = std::make_shared<FutureMessage>();
 
       // Our response is satisfied when the rpcs come back.
-      whenValueSet->addCallback(
-          [responseFuture, messageId, rref](
-              const rpc::Message& /* unused */,
-              const c10::optional<utils::FutureError>& error) {
-            if (!error) {
-              Message m = ScriptRRefFetchRet({rref->getValue()}).toMessage();
-              m.setId(messageId);
-              responseFuture->markCompleted(std::move(m));
-            } else {
-              responseFuture->setError(error->what());
-            }
-          });
+      rref->addCallback([responseFuture, messageId, rref](
+                            const auto& rRefValue,
+                            const c10::optional<utils::FutureError>& error) {
+        if (!error) {
+          Message m = ScriptRRefFetchRet({rRefValue}).toMessage();
+          m.setId(messageId);
+          responseFuture->markCompleted(std::move(m));
+        } else {
+          responseFuture->setError(error->what());
+        }
+      });
       return responseFuture;
     }
     case MessageType::PYTHON_RREF_FETCH_CALL: {
@@ -188,25 +187,22 @@ std::shared_ptr<FutureMessage> RequestCallbackImpl::processRpc(
         return wrap(PythonRRefFetchRet(result.toIValues()).toMessage());
       }
 
-      auto whenValueSet = rref->getFuture();
       auto responseFuture = std::make_shared<FutureMessage>();
 
       // Our response is satisfied when the rpcs come back.
-      whenValueSet->addCallback(
-          [responseFuture, messageId, rref](
-              const rpc::Message& /* unused */,
-              const c10::optional<utils::FutureError>& error) {
-            if (!error) {
-              SerializedPyObj result =
-                  PythonRpcHandler::getInstance().serialize(
-                      jit::toPyObject(rref->getValue()));
-              Message m = PythonRRefFetchRet(result.toIValues()).toMessage();
-              m.setId(messageId);
-              responseFuture->markCompleted(std::move(m));
-            } else {
-              responseFuture->setError(error->what());
-            }
-          });
+      rref->addCallback([responseFuture, messageId, rref](
+                            const auto& rRefValue,
+                            const c10::optional<utils::FutureError>& error) {
+        if (!error) {
+          SerializedPyObj result = PythonRpcHandler::getInstance().serialize(
+              jit::toPyObject(rRefValue));
+          Message m = PythonRRefFetchRet(result.toIValues()).toMessage();
+          m.setId(messageId);
+          responseFuture->markCompleted(std::move(m));
+        } else {
+          responseFuture->setError(error->what());
+        }
+      });
       return responseFuture;
     }
     case MessageType::RREF_USER_DELETE: {

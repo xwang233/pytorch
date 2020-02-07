@@ -52,15 +52,55 @@ inline std::ostream& operator<<(
   }
 }
 
-inline std::vector<int64_t> get_channels_last_strides(IntArrayRef sizes) {
-  AT_ASSERT(sizes.size() == 4);
+inline bool is_supported_channels_last_memory_format (IntArrayRef sizes, MemoryFormat memory_format) {
+  if (memory_format == MemoryFormat::ChannelsLast) {
+    return sizes.size() == 3 || sizes.size() == 4;
+  }
+  if (memory_format == MemoryFormat::ChannelsLast3d) {
+    return sizes.size() == 4 || sizes.size() == 5;
+  }
+  return false;
+}
+
+// Note: Call is_supported_channels_last_memory_format() first to avoid throw
+inline std::vector<int64_t> get_channels_last_stride_indices(IntArrayRef sizes, MemoryFormat memory_format) {
+  switch (memory_format) {
+    case MemoryFormat::ChannelsLast:
+      {
+        if (sizes.size() == 3) {
+          return {0, 2, 1};
+        }
+        else if (sizes.size() == 4) {
+          return {1, 3, 2, 0};
+        }
+        TORCH_CHECK(false, "ChannelsLast2d doesn't support size ", sizes.size());
+      }
+    case MemoryFormat::ChannelsLast3d:
+      {
+        if (sizes.size() == 4) {
+          return {0, 3, 2, 1};
+        }
+        else if (sizes.size() == 5) {
+          return {1, 4, 3, 2, 0};
+        }
+        TORCH_CHECK(false, "ChannelsLast3d doesn't support size ", sizes.size());
+      }
+    default:
+      TORCH_CHECK(false, "Unsupported channels last memory format ", memory_format);
+  }
+}
+
+inline std::vector<int64_t> get_channels_last_strides(IntArrayRef sizes, MemoryFormat memory_format) {
+  std::vector<int64_t> indices = get_channels_last_stride_indices(sizes, memory_format);
   std::vector<int64_t> strides(sizes.size());
-  strides[1] = 1;
-  strides[3] = sizes[1];
-  strides[2] = strides[3] * sizes[3];
-  strides[0] = strides[2] * sizes[2];
+  strides[indices[0]] = 1;
+  for (size_t i = 1; i < indices.size(); ++i) {
+    strides[indices[i]] = strides[indices[i-1]] * sizes[indices[i-1]];
+  }
   return strides;
 }
+
+
 
 // Note [Ambiguous is_channels_last_strides]
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -106,44 +146,53 @@ inline std::vector<int64_t> get_channels_last_strides(IntArrayRef sizes) {
 // By the time accumulated permutation is enabled to replace implicit
 // memory_foramt through strides, we should be updating our tests and fix the
 // issues in our tests.
-inline bool is_channels_last_strides(const IntArrayRef sizes, const IntArrayRef strides) {
-  if (sizes.size() == 4) {
-    int64_t min = 0;
-    // special case for trivial C dimension. default to NCHW
-    if (strides[1]==0) {
+//
+
+// NOTE:This function support channels last 2d (N)CHW and channels last 3d (N)CDHW
+// Comment inside the code is based on channels last 2d memory format
+inline bool is_channels_last_strides(const IntArrayRef sizes, const IntArrayRef strides, MemoryFormat memory_format) {
+  if (!is_supported_channels_last_memory_format(sizes, memory_format)) {
+    return false;
+  }
+
+  std::vector<int64_t> indices = get_channels_last_stride_indices(sizes, memory_format);
+
+  int64_t min = 0;
+  int64_t channel_dim = indices[0];
+  int64_t last_dim = indices.back();
+  // special case for trivial C dimension. default to NCHW
+  if (strides[channel_dim]==0) {
+    return false;
+  }
+  for (auto& d : indices) {
+    if (sizes[d] == 0) {
       return false;
     }
-    for (auto& d : {1, 3, 2, 0}) {
-      if (sizes[d] == 0) {
-        return false;
-      }
-      if (strides[d] < min) {
-        return false;
-      }
-      // Fallback to NCHW as default layout for ambiguous cases
-      // This is the flaw of implicit memory_format from strides.
-      // N111 tensor with identical strides for size 1 dimension;
-      // Two cases could lead us here:
-      // a. N111 contiguous Tensor ([N,1,1,1]@[1,1,1,1])
-      // b. N11W contiguous Tensor sliced on the W-dimension. ([N,1,1,1]@[W,W,W,W])
-      if (d==0 && min==strides[1]) {
-        return false;
-      }
-      // This is necessary to:
-      // 1. distinguish the memory_format of N1H1;
-      //     [H, 1, 1, 1] channels_last stride
-      //     [H, H, 1, 1] contiguous stride
-      // 2. permutation of 1C1W:
-      //     [1, C, 1, H]@[HC, H, H, 1] transpose(1, 3)
-      //     [1, H, 1, C]@[HC, 1, H, H] shouldn't be identified as channels_last
-      min = strides[d];
-      if (sizes[d] > 1) {
-        min *= (sizes[d]-1);
-      }
+    if (strides[d] < min) {
+      return false;
     }
-    return true;
+    // Fallback to NCHW as default layout for ambiguous cases
+    // This is the flaw of implicit memory_format from strides.
+    // N111 tensor with identical strides for size 1 dimension;
+    // Two cases could lead us here:
+    // a. N111 contiguous Tensor ([N,1,1,1]@[1,1,1,1])
+    // b. N11W contiguous Tensor sliced on the W-dimension. ([N,1,1,1]@[W,W,W,W])
+    if (d==last_dim && min==strides[channel_dim]) {
+      return false;
+    }
+    // This is necessary to:
+    // 1. distinguish the memory_format of N1H1;
+    //     [H, 1, 1, 1] channels_last stride
+    //     [H, H, 1, 1] contiguous stride
+    // 2. permutation of 1C1W:
+    //     [1, C, 1, H]@[HC, H, H, 1] transpose(1, 3)
+    //     [1, H, 1, C]@[HC, 1, H, H] shouldn't be identified as channels_last
+    min = strides[d];
+    if (sizes[d] > 1) {
+      min *= sizes[d];
+    }
   }
-  return false;
+  return true;
 }
 
 } // namespace c10

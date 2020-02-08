@@ -2551,12 +2551,18 @@ class TestAutograd(TestCase):
         self.assertFalse(torch.autograd._profiler_enabled())
 
         last_end = 0
-        names = ['mul', 'add']
+        names = ['is_complex', 'mul', 'is_complex', 'add']
         self.assertEqual(len(p.function_events), len(names))
         for info, expected_name in zip(p.function_events, names):
             self.assertGreater(info.cpu_interval.start, last_end)
             self.assertEqual(info.name, expected_name)
             last_end = info.cpu_interval.end
+
+    def test_profiler_unboxed_only(self):
+        x = torch.rand(3, 4)
+
+        with torch.autograd.profiler.profile() as prof:
+            x.resize_([3, 2])
 
     def test_record_function_callbacks(self):
         x = torch.randn(10, 10)
@@ -2715,13 +2721,17 @@ class TestAutograd(TestCase):
         start_order = [
             'profiler::_record_function_enter',
             'outer',
+            'is_complex',
             'mul',
+            'is_complex',
             'add',
             'profiler::_record_function_enter',
             'inner',
+            'is_complex',
             'sub',
             'profiler::_record_function_exit',
             'profiler::_record_function_exit',
+            'is_complex',
             'div',
         ]
         self.assertEqual(len(events), len(start_order))

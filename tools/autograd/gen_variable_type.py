@@ -782,9 +782,11 @@ def emit_body(declaration):
                 if not return_info['dynamic_type'] in ['Tensor', 'TensorList']:
                     raise RuntimeError("{} that return differentiable views can only return Tensor or Tensor[]".format(base_name))
                 # Only allow rebasing of the history if we return a single Tensor
-                allow_rebase_history = 'true'
+                # If we are in a no grad block, raise a warning
+                # See NOTE [ View + Inplace detection ] for more details about this logic
+                allow_rebase_history = "GradMode::is_enabled() ? {}: {}".format("OnRebase::ALLOW_REBASE", "OnRebase::WARN_REBASE")
                 if return_info['dynamic_type'] == 'TensorList':
-                    allow_rebase_history = 'false'
+                    allow_rebase_history = "OnRebase::ERROR_REBASE"
                 wrapped_call = ("as_view(/* base */{}, /* output */ {}, /* is_differentiable */ true, "
                                 "/* allow_rebase_history */ {})").format(view_info, call, allow_rebase_history)
                 return wrapped_call

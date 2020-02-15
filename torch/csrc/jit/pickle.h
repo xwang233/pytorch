@@ -66,10 +66,12 @@ TORCH_API IValue pickle_load(const std::vector<char>& data);
 /// binary. `reader` should remember where it last read, and return
 /// the number of bytes read.
 /// See `torch::pickle` for details.
+/// type_resolver is used to resolve any JIT type based on type str
 TORCH_API IValue unpickle(
     std::function<size_t(char*, size_t)> reader,
     ClassResolver class_resolver,
-    const std::vector<at::Tensor>* tensor_table);
+    const std::vector<at::Tensor>* tensor_table,
+    TypeResolver type_resolver = nullptr);
 
 /// Decode a chunk of memory containing pickled data into its `torch::IValue`s.
 ///
@@ -81,7 +83,8 @@ TORCH_API IValue unpickle(
     const char* data,
     size_t size,
     ClassResolver class_resolver = nullptr,
-    const std::vector<at::Tensor>* tensor_table = nullptr);
+    const std::vector<at::Tensor>* tensor_table = nullptr,
+    TypeResolver type_resolver = nullptr);
 
 } // namespace jit
 } // namespace torch

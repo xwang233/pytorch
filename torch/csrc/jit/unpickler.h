@@ -8,6 +8,10 @@ namespace jit {
 using ClassResolver =
     std::function<c10::StrongTypePtr(const c10::QualifiedName&)>;
 
+// Input is qualified name string or type str, output is JIT typePtr
+using TypeResolver =
+    std::function<c10::TypePtr(const std::string&)>;
+
 using ObjLoader =
     std::function<c10::intrusive_ptr<c10::ivalue::Object>(at::StrongTypePtr, IValue)>;
 
@@ -19,14 +23,20 @@ class Unpickler {
   TH_DISALLOW_COPY_AND_ASSIGN(Unpickler);
 
  public:
-  // tensors inside the pickle are references to the tensor_table
+  // tensors inside the pickle are references to the tensor_table.
+  // class_resolver is to resolve strong class type, type_resolver_ is
+  // to resolve any JIT type. class_resolver and type_resolver are not merged
+  // here because some use cases need to get strong class type that
+  // type_resolver_ can not return.
   Unpickler(
       std::function<size_t(char*, size_t)> reader,
       ClassResolver class_resolver,
-      const std::vector<at::Tensor>* tensor_table)
+      const std::vector<at::Tensor>* tensor_table,
+      TypeResolver type_resolver = nullptr)
       : reader_(reader),
         tensor_table_(tensor_table),
-        class_resolver_(std::move(class_resolver)) {}
+        class_resolver_(std::move(class_resolver)),
+        type_resolver_(std::move(type_resolver)) {}
 
   // tensors inside the pickle contain meta-data, the raw tensor
   // dead is retrieved by calling `read_record`.
@@ -76,6 +86,9 @@ class Unpickler {
       const std::string& module_name,
       const std::string& class_name);
   void rebuildTensor(bool quantized);
+  #ifdef USE_DISTRIBUTED
+    void rebuildRRef();
+  #endif
   PickleOpCode readInstruction();
   PickleOpCode readOpCode() {
     return static_cast<PickleOpCode>(read<uint8_t>());
@@ -105,6 +118,7 @@ class Unpickler {
   // optionally nullptr, needs to be present for creating classes
   ClassResolver class_resolver_;
   ObjLoader obj_loader_;
+  TypeResolver type_resolver_;
   IValue empty_tuple_;
 
   std::function<at::DataPtr(const std::string&)> read_record_;

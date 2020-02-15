@@ -283,14 +283,32 @@ class MyScriptClass:
         self.a = 10
 
 
+@torch.jit.interface
+class MyModuleInterface(torch.nn.Module):
+    def forward(self):
+        # type: () -> Tensor
+        pass
+
 class MyScriptModule(torch.jit.ScriptModule):
     def __init__(self):
         super().__init__()
-        self.a = 10
+        self.a = torch.randn(5)
 
     @torch.jit.script_method
-    def my_method(self):
-        self.a = 11
+    def forward(self):
+        # type: () -> Tensor
+        return self.a
+
+
+def create_local_rref():
+    script_mod = MyScriptModule()
+    return rpc.RRef(script_mod)
+
+
+@torch.jit.script
+def rref_myscriptmodule_forward(rref_module):
+    # type: (RRef[MyModuleInterface]) -> Tensor
+    return rref_module.to_here().forward()
 
 
 # load_tests from common_utils is used to automatically filter tests for
@@ -898,14 +916,14 @@ class RpcTest(RpcAgentTestFixture):
         ):
             ret = rpc._rpc_sync_torchscript(
                 "worker{}".format(dst_rank),
-                _qualified_name(MyScriptModule().my_method),
+                _qualified_name(MyScriptModule().forward),
                 args=(),
             )
         # Python 3.5 and Python 3.6 throw different error message, the only
         # common word can be greped is "pickle".
         with self.assertRaisesRegex(Exception, "pickle"):
             ret = rpc.rpc_sync(
-                "worker{}".format(dst_rank), MyScriptModule().my_method, args=()
+                "worker{}".format(dst_rank), MyScriptModule().forward, args=()
             )
 
     @dist_init
@@ -1772,3 +1790,20 @@ class RpcJitTest(RpcAgentTestFixture):
         res = module_with_rrefs()
         res_hat = [torch.ones(2, 2) + 1 for _ in range(4)]
         self.assertEquals(res, res_hat)
+
+
+    @dist_init
+    def test_local_rref_with_script_module(self):
+        n = self.rank + 1
+        dst_rank = n % self.world_size
+
+        # create a local RRef on dst_rank that holds a ScriptModule
+        rref_module_sync = rpc.rpc_sync("worker{}".format(dst_rank), create_local_rref, args=())
+
+        # pass the dst_rank local created RRef module to jit function
+        # this ensures that the RRef created in the dst_rank worker
+        # is holding a valid IValue with ScriptModule type instead of
+        # a blind PyObjectType
+        res = rref_myscriptmodule_forward(rref_module_sync)
+
+        self.assertEqual(res, MyScriptModule().forward())

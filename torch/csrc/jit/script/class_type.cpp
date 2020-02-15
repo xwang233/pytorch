@@ -1,6 +1,8 @@
 #include <ATen/core/jit_type.h>
 #include <c10/macros/Macros.h>
+#ifndef USE_MOBILE_CLASSTYPE
 #include <torch/csrc/jit/script/module.h>
+#endif // USE_MOBILE_CLASSTYPE
 
 namespace c10 {
 
@@ -83,6 +85,8 @@ void ClassType::unsafeRemoveAttribute(const std::string& name) {
   attributeTypes_.erase(attributeTypes_.begin() + slot);
 }
 
+#ifndef USE_MOBILE_CLASSTYPE
+
 void ClassType::addMethod(Function* method) {
   TORCH_CHECK(
       getMethod(method->name()) == nullptr,
@@ -101,6 +105,18 @@ Function* ClassType::getMethod(const std::string& name) const {
   }
   return nullptr;
 }
+
+#else // USE_MOBILE_CLASSTYPE
+
+void ClassType::addMethod(Function* method) {
+  TORCH_INTERNAL_ASSERT(false);
+}
+
+Function* ClassType::getMethod(const std::string& name) const {
+  TORCH_INTERNAL_ASSERT(false);
+}
+
+#endif // USE_MOBILE_CLASSTYPE
 
 size_t ClassType::addConstant(
       const std::string& name,
@@ -228,9 +244,21 @@ bool ClassType::isSubtypeOfExt(const TypePtr rhs, std::ostream* why_not) const {
   }
   return Type::isSubtypeOfExt(rhs, why_not);
 }
-#else
+#else // USE_MOBILE_CLASSTYPE
+
+// This file exists because we need to reference module.h, which we can't from
+// c10. Sigh...
+FunctionType::FunctionType(Function* function)
+    : NamedType(TypeKind::FunctionType, "") {
+  TORCH_INTERNAL_ASSERT(false, "Not implemented on mobile");
+}
+
+ClassTypePtr ClassType::refine(at::ArrayRef<TypePtr> refined_slots) const {
+  TORCH_INTERNAL_ASSERT(false, "Not implemented on mobile");
+}
+
 bool ClassType::isSubtypeOfExt(const TypePtr rhs, std::ostream* why_not) const {
   return Type::isSubtypeOfExt(rhs, why_not);
 }
-#endif
+#endif // USE_MOBILE_CLASSTYPE
 } // namespace c10

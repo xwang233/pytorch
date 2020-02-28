@@ -131,7 +131,7 @@ void csrmm2(
     cusparse_value_type         /* data type of values */
   )); 
 
-  int nt = n, kt = k;
+  int64_t nt = n, kt = k;
   if (transb == 't' || transb == 'T')
     std::swap(nt, kt);
 

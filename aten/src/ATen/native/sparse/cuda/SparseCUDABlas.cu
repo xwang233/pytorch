@@ -118,8 +118,6 @@ void csrmm2(
     "Please submit an issue on Github."
   );
 
-  auto handle = at::cuda::getCurrentCUDASparseHandle();
-
   cusparseSpMatDescr_t descA; 
   TORCH_CUDASPARSE_CHECK(cusparseCreateCsr(
     &descA,                     /* output */
@@ -133,10 +131,14 @@ void csrmm2(
     cusparse_value_type         /* data type of values */
   )); 
 
+  int nt = n, kt = k;
+  if (transb == 't' || transb == 'T')
+    std::swap(nt, kt);
+
   cusparseDnMatDescr_t descB; 
   TORCH_CUDASPARSE_CHECK(cusparseCreateDnMat(
     &descB,               /* output */
-    k, n, ldb,            /* rows, cols, leading dimension */
+    kt, nt, ldb,          /* rows, cols, leading dimension */
     b,                    /* values */
     cusparse_value_type,  /* data type of values */
     CUSPARSE_ORDER_COL    /* memory layout, ONLY column-major is supported now */
@@ -151,6 +153,8 @@ void csrmm2(
     CUSPARSE_ORDER_COL    /* memory layout, ONLY column-major is supported now */
   )); 
 
+
+  auto handle = at::cuda::getCurrentCUDASparseHandle();
 
   // cusparseSpMM_bufferSize returns the bufferSize that can be used by cusparseSpMM
   size_t bufferSize; 

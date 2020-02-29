@@ -77,25 +77,6 @@ cusparseOperation_t convertTransToCusparseOperation(char trans) {
   }
 }
 
-void adjustLd(char transb, int64_t m, int64_t n, int64_t k, int64_t *ldb, int64_t *ldc)
-{
-  int transb_ = ((transb == 't') || (transb == 'T'));
-
-  if(n == 1)
-    *ldc = m;
-
-  if(transb_)
-  {
-    if(k == 1)
-      *ldb = n;
-  }
-  else
-  {
-    if(n == 1)
-      *ldb = k;
-  }
-}
-
 /* Level 3 */
 // T can only be float or double
 template<typename T> 
@@ -105,9 +86,11 @@ void csrmm2(
   T alpha, T *csrvala, int *csrrowptra, int *csrcolinda, 
   T *b, int64_t ldb, T beta, T *c, int64_t ldc)
 {
+  static_assert(std::is_same<float, T>::value || std::is_same<double, T>::value); 
   constexpr auto cusparse_value_type = std::is_same<float, T>::value ? CUDA_R_32F : CUDA_R_64F; 
 
-  adjustLd(transb, m, n, k, &ldb, &ldc);
+  if (csrvala == nullptr || b == nullptr || c == nullptr) return; 
+
   cusparseOperation_t opa = convertTransToCusparseOperation(transa);
   cusparseOperation_t opb = convertTransToCusparseOperation(transb);
 
@@ -118,10 +101,13 @@ void csrmm2(
     "Please submit an issue on Github."
   );
 
+  int64_t ma = m, ka = k; 
+  if (transa != 'n') std::swap(ma, ka); 
+
   cusparseSpMatDescr_t descA; 
   TORCH_CUDASPARSE_CHECK(cusparseCreateCsr(
     &descA,                     /* output */
-    m, k, nnz,                  /* rows, cols, number of non zero elements */
+    ma, ka, nnz,                  /* rows, cols, number of non zero elements */
     csrrowptra,                 /* row offsets of the sparse matrix, size = rows +1 */
     csrcolinda,                 /* column indices of the sparse matrix, size = nnz */
     csrvala,                    /* values of the sparse matrix, size = nnz */
@@ -131,14 +117,13 @@ void csrmm2(
     cusparse_value_type         /* data type of values */
   )); 
 
-  int64_t nt = n, kt = k;
-  if (transb == 't' || transb == 'T')
-    std::swap(nt, kt);
+  int64_t kb = k, nb = n;
+  if (transb != 'n') std::swap(kb, nb); 
 
   cusparseDnMatDescr_t descB; 
   TORCH_CUDASPARSE_CHECK(cusparseCreateDnMat(
     &descB,               /* output */
-    kt, nt, ldb,          /* rows, cols, leading dimension */
+    kb, nb, ldb,          /* rows, cols, leading dimension */
     b,                    /* values */
     cusparse_value_type,  /* data type of values */
     CUSPARSE_ORDER_COL    /* memory layout, ONLY column-major is supported now */
@@ -187,6 +172,8 @@ void csrmm2(
   TORCH_CUDASPARSE_CHECK(cusparseDestroySpMat(descA)); 
   TORCH_CUDASPARSE_CHECK(cusparseDestroyDnMat(descB)); 
   TORCH_CUDASPARSE_CHECK(cusparseDestroyDnMat(descC)); 
+
+  cudaDeviceSynchronize();
 
   // TODO: Proper fix is to create real descriptor classes
 }

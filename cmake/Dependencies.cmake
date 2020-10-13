@@ -1644,6 +1644,14 @@ if(NOT INTERN_BUILD_MOBILE)
     set(AT_CUDNN_ENABLED 1)
   endif()
 
+  if(NOT USE_CUSOLVER)
+    message(STATUS "USE_CUSOLVER is set to 0. Compiling without cuSolver support")
+    set(AT_CUSOLVER_ENABLED 0)
+  else()
+    # no need to include extra directory, since cusolver header is usually in the same directory as cuda
+    set(AT_CUSOLVER_ENABLED 1)
+  endif()
+
   if(NOT USE_ROCM)
     message("disabling ROCM because NOT USE_ROCM is set")
     message(STATUS "MIOpen not found. Compiling without MIOpen support")

@@ -2,8 +2,9 @@
 #include <ATen/NativeFunctions.h>
 #include <ATen/cuda/CUDASolver.h>
 #include <c10/cuda/CUDACachingAllocator.h>
+#include <ATen/cuda/CUDAConfig.h>
 
-#ifdef CUDART_VERSION
+#if AT_CUSOLVER_ENABLED() && defined(CUDART_VERSION)
 
 namespace at {
 namespace cuda {
@@ -51,4 +52,4 @@ void getrs<float>(
 } // namespace cuda
 } // namespace at
 
-#endif // CUDART_VERSION
+#endif // AT_CUSOLVER_ENABLED && defined(CUDART_VERSION)

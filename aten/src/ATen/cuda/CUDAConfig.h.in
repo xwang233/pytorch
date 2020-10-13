@@ -8,6 +8,7 @@
 // only be included from C++ files.
 
 #define AT_CUDNN_ENABLED() @AT_CUDNN_ENABLED@
+#define AT_CUSOLVER_ENABLED() @AT_CUSOLVER_ENABLED@
 #define AT_ROCM_ENABLED() @AT_ROCM_ENABLED@
 
 #define NVCC_FLAGS_EXTRA "@NVCC_FLAGS_EXTRA@"

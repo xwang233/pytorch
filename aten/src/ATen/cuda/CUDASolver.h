@@ -1,8 +1,9 @@
 #pragma once
 
 #include <ATen/cuda/CUDAContext.h>
+#include <ATen/cuda/CUDAConfig.h>
 
-#ifdef CUDART_VERSION
+#if AT_CUSOLVER_ENABLED() && defined(CUDART_VERSION)
 
 namespace at {
 namespace cuda {
@@ -38,4 +39,4 @@ void getrs<double>(CUDASOLVER_GETRS_ARGTYPES(double));
 } // namespace cuda
 } // namespace at
 
-#endif // CUDART_VERSION
+#endif // AT_CUSOLVER_ENABLED && defined(CUDART_VERSION)

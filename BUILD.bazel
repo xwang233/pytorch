@@ -24,6 +24,7 @@ COMMON_COPTS = [
 ] + if_cuda([
     "-DUSE_CUDA",
     "-DUSE_CUDNN",
+    "-DUSE_CUSOLVER",
 ])
 
 # c10
@@ -555,6 +556,7 @@ header_template_rule(
     out = "aten/src/ATen/cuda/CUDAConfig.h",
     substitutions = {
         "@AT_CUDNN_ENABLED@": "1",
+        "@AT_CUSOLVER_ENABLED@": "1",
         "@AT_ROCM_ENABLED@": "0",
         "@NVCC_FLAGS_EXTRA@": "",
     },

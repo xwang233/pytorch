@@ -30,6 +30,9 @@
 #   USE_CUDNN=0
 #     disables the cuDNN build
 #
+#   USE_CUSOLVER=0
+#     disables the cuSolver build
+#
 #   USE_FBGEMM=0
 #     disables the FBGEMM build
 #

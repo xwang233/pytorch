@@ -305,11 +305,34 @@ static void Nvfuser_Matmul_8warp4stage(
 // ----------------------------- Benchmark Instantiation-------
 
 // Common utils:
-#define NO_TILE_QUANTIZATION_ARGS                                             \
-  ArgsProduct(                                                                \
-      {{2048}, {3456}, benchmark::CreateDenseRange(512, 4096, /*step=*/512)}) \
-      ->Unit(benchmark::kMicrosecond)                                         \
-      ->UseManualTime();
+#define NO_TILE_QUANTIZATION_ARGS      \
+  Args({1024, 256, 1024})              \
+  ->Args({8, 128, 8})                  \
+  /*->Args({1, 128, 1})*/                  \
+  /*->Args({1, 48, 1152})*/                \
+  ->Args({1152, 128, 784})             \
+  /*->Args({1152, 48, 1})*/                \
+  ->Args({128, 512, 4096})             \
+  /*->Args({192, 1, 672})*/                \
+  /*->Args({1, 64, 1})*/                   \
+  /*->Args({2048, 1, 1})*/                 \
+  /*->Args({1, 1152, 48})*/                \
+  ->Args({64, 1152, 384})              \
+  ->Args({72, 8, 784})                 \
+  ->Args({784, 128, 1152})             \
+  ->Args({128, 512, 2048})             \
+  ->Args({64, 384, 1152})              \
+  ->Args({3136, 72, 8})                \
+  ->Args({512, 2048, 128})             \
+  /*->Args({112, 1, 480})*/                \
+  ->Args({1024, 512, 1024})            \
+  /*->Args({112, 1, 672})*/                \
+  ->Args({784, 72, 8})                 \
+  ->Args({784, 8, 72})                 \
+  /*->Args({1, 1, 2048})*/                 \
+  ->Args({1024, 1024, 1024})           \
+  ->Unit(benchmark::kMicrosecond)      \
+  ->UseManualTime();
 
 #define ForAllLayouts(run)   \
   run(TT, MatmulLayout::TT); \

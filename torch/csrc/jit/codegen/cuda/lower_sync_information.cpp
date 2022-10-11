@@ -410,26 +410,6 @@ void SyncMap::build(Fusion* fusion) {
             }
           }
 
-          // If same parallel type and mapped, no need for syncs unless
-          // producer is in smem, producer parallel type is a thread
-          // dimension, and consumer concretizes the dimension. This sync is
-          // due to the redundant predicate omission in lower thread
-          // predicate.
-          auto redundant_preds = GpuLower::current()
-                                     ->threadPredMap()
-                                     .getPredicateInfo(producer)
-                                     .redundant_types;
-
-          if (p_id->isBroadcast() &&
-              GpuLower::current()->concretizedBroadcastDomains()->isConcretized(
-                  p_id) &&
-              producer->getMemoryType() == MemoryType::Shared &&
-              redundant_preds.hasTID()) {
-            redundant_preds.clearAllBID();
-            raw_dims |= redundant_preds;
-            continue;
-          }
-
           // When the producer axis is a broadcast, it is not really
           // parallelized unless thread-predicated and concretized
           if (isParallelTypeThread(producer_ptype) && p_id->isBroadcast() &&
@@ -483,7 +463,7 @@ void SyncMap::build(Fusion* fusion) {
       } // end for consumers
 
       if (raw_dims.any()) {
-        needs_raw_sync_[producer] = raw_dims;
+        needs_raw_sync_[producer] |= raw_dims;
       }
 
     } // end producer
@@ -492,10 +472,14 @@ void SyncMap::build(Fusion* fusion) {
 
 std::string SyncMap::toString() const {
   std::stringstream ss;
-  ss << "TVs requiring RAW:" << std::endl;
+  ss << "SyncMap:";
+  bool is_first = true;
   for (auto entry : needs_raw_sync_) {
-    ss << "  " << entry.first->toString() << " :: " << entry.second.toString()
-       << std::endl;
+    if (!is_first) {
+      ss << ",";
+    }
+    ss << " " << entry.first->toString() << " -> " << entry.second.toString();
+    is_first = false;
   }
   return ss.str();
 }

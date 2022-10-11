@@ -305,6 +305,8 @@ static void Nvfuser_Matmul_8warp4stage(
 // ----------------------------- Benchmark Instantiation-------
 
 // Common utils:
+// Those are the 25 most commonly used matmul shapes in TIMM and torchdynamo benchmark suites.
+// Nvfuser benchmark of some shapes with 1 in m, n, k sizes crash and those shapes are temporarily disabled. 
 #define NO_TILE_QUANTIZATION_ARGS      \
   Args({1024, 256, 1024})              \
   ->Args({8, 128, 8})                  \

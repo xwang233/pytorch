@@ -5101,11 +5101,11 @@ TEST_F(NVFuserTest, FusionInsertMagicZero1_CUDA) {
       tv2->toString());
 }
 
-TEST_F(NVFuserTest, FusionRepro1860_CUDA) {
+TEST_F(NVFuserTest, FusionExpandRepro1860_CUDA) {
   auto fusion_ptr = std::make_unique<Fusion>();
   Fusion& fusion = *fusion_ptr;
   FusionGuard fg(&fusion);
-  std::vector<bool> contiguity{true, false, false};
+  std::vector<bool> contiguity{false, false, false};
 
   std::vector<int64_t> shape{1, -1, -1};
   TensorView* tv0 = makeContigConcreteTensor(shape);
@@ -6505,6 +6505,129 @@ TEST_F(NVFuserTest, FusionSimpleAmperePipeline_CUDA) {
   auto cg_outputs = fe.runFusion({input1});
 
   testValidate(&fusion, cg_outputs, {input1}, {input1}, __LINE__, __FILE__);
+}
+
+TEST_F(NVFuserTest, FusionExpandedInput_CUDA) {
+  std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
+  auto fusion = fusion_ptr.get();
+  FusionGuard fg(fusion);
+
+  TensorView* tv0 = TensorViewBuilder()
+                        .ndims(3)
+                        .shape({-1, -1, -1})
+                        .contiguity({false, false, true})
+                        .expanded({false, true, false})
+                        .build();
+  fusion->addInput(tv0);
+  auto tv1 = set(tv0);
+  fusion->addOutput(tv1);
+
+  auto options = at::TensorOptions().dtype(kFloat).device(at::kCUDA, 0);
+  at::Tensor t0 = at::randn({4096, 1, 4}, options).expand({-1, 7, -1});
+
+  FusionExecutorCache fec(std::move(fusion_ptr));
+  auto cg_outputs = fec.runFusionWithInputs({t0});
+
+  testValidate(fusion, cg_outputs, {t0}, {t0}, __LINE__, __FILE__);
+}
+
+TEST_F(NVFuserTest, FusionExpandedInputThrow_CUDA) {
+  std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
+  auto fusion = fusion_ptr.get();
+  FusionGuard fg(fusion);
+
+  TensorView* tv0 = TensorViewBuilder()
+                        .ndims(3)
+                        .shape({3, 7, 3})
+                        .contiguity({false, false, true})
+                        .expanded({false, true, false})
+                        .build();
+  fusion->addInput(tv0);
+  auto tv1 = set(tv0);
+  tv1->domain()->setContiguity({true, true, true});
+  fusion->addOutput(tv1);
+
+  EXPECT_THAT(
+      [&]() { GpuLower lower(fusion); },
+      ::testing::ThrowsMessage<c10::Error>(::testing::HasSubstr(
+          "The expanded dim and the dim before it can not be contiguous.")));
+}
+
+// Repro for
+// https://github.com/csarofeen/pytorch/issues/1843#issuecomment-1270759724
+TEST_F(NVFuserTest, FusionVectorizeRepro1843_CUDA) {
+  std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
+  auto fusion = fusion_ptr.get();
+  FusionGuard fg(fusion);
+
+  TensorView* tv1 =
+      TensorViewBuilder().ndims(2).contiguity({true, true}).build();
+  TensorView* tv0 =
+      TensorViewBuilder().ndims(2).contiguity({true, true}).build();
+  fusion->addInput(tv1);
+  fusion->addInput(tv0);
+
+  auto tv7 = sum(tv0, {1}, true);
+  auto tv_exp =
+      expand(tv7, {tv0->axis(0)->extent(), IrBuilder::create<Int>(32128)});
+  auto tv3 = exp(tv1);
+  auto tv8 = mul(tv3, tv_exp);
+  auto tv13 = sub(tv0, tv8);
+  fusion->addOutput(tv13);
+
+  auto options = at::TensorOptions().dtype(kFloat).device(at::kCUDA, 0);
+  at::Tensor t1 =
+      at::empty_strided({4096, 32128}, {32128, 1}, options).random_();
+  at::Tensor t0 =
+      at::empty_strided({4096, 32128}, {32128, 1}, options).random_();
+
+  FusionExecutorCache fec(std::move(fusion_ptr));
+  auto cg_outputs = fec.runFusionWithInputs({t1, t0});
+
+  auto ref = t0 - t1.exp() * t0.sum((1), true);
+  testValidate(fusion, cg_outputs, {t1, t0}, {ref}, __LINE__, __FILE__);
+}
+
+// HuggingFace repro:
+// https://github.com/csarofeen/pytorch/issues/2064
+TEST_F(NVFuserTest, FusionHuggingFaceRepro2064_CUDA) {
+  auto fusion_ptr = std::make_unique<Fusion>();
+  Fusion& fusion = *fusion_ptr.get();
+  FusionGuard fg(&fusion);
+
+  auto tv0 = makeContigTensor(2);
+  fusion.addInput(tv0);
+
+  auto tv1 = broadcast(tv0, {true, false, false});
+  auto tv2 = mul(tv1, IrBuilder::create<Double>(0.5));
+  auto tv3 = mul(tv1, IrBuilder::create<Double>(0.707107));
+  auto tv4 = erf(tv3);
+  auto tv5 = add(tv4, IrBuilder::create<Double>(1.0));
+  auto tv6 = mul(tv2, tv5);
+  auto tv7 = sum(tv6, {0});
+
+  fusion.addOutput(tv1);
+  fusion.addOutput(tv7);
+
+  auto options = at::TensorOptions().dtype(at::kFloat).device(at::kCUDA, 0);
+  auto t0 = at::randn({2, 8}, options);
+  auto t1 = t0.expand({1, 2, 8});
+  auto t2 = t1 * 0.5;
+  auto t5 = (t1 * 0.707107).erf() + 1.0;
+  auto t6 = t2 * t5;
+  auto t7 = t6.sum(0);
+
+  FusionExecutorCache executor_cache(std::move(fusion_ptr));
+  auto cg_outputs = executor_cache.runFusionWithInputs({t0});
+
+  testValidate(
+      executor_cache.fusion(),
+      cg_outputs,
+      {t0},
+      {t1, t7},
+      __LINE__,
+      __FILE__,
+      "");
 }
 
 // Test file size should be up to 10K LoC. Create a new file for more tests.

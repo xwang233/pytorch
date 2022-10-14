@@ -428,9 +428,9 @@ std::vector<std::pair<bool, int>> getVectorizedFusionInputOutput(
   std::vector<std::pair<bool, int>> vectorized_input_output;
 
   // When the producer is a fusion input, validate only the producer
-  // and assume the consumer is contiguous. Similarly, when the
+  // and assume the consumer to be vectorizable. Similarly, when the
   // consumer is a fusion output, validate the consumer and assume the
-  // producer is contiguous.
+  // producer is vectorizable.
 
   if (producer_tv->isFusionInput()) {
     auto producer_it = std::find(
@@ -443,16 +443,6 @@ std::vector<std::pair<bool, int>> getVectorizedFusionInputOutput(
     auto pos = std::distance(fusion->inputs().begin(), producer_it);
     vectorized_input_output.push_back(
         std::make_pair<bool, int>(true, static_cast<int>(pos)));
-  } else {
-    // If not fusion input, assume it's fully contiguous, so nothing
-    // to check with respect to strides.
-    TORCH_INTERNAL_ASSERT(
-        std::all_of(
-            producer_tv->domain()->contiguity().begin(),
-            producer_tv->domain()->contiguity().end(),
-            [](bool contig) { return contig; }),
-        "Unsupported pattern of vectorization: ",
-        consumer_tv->definition()->toString());
   }
 
   if (consumer_tv->isFusionOutput()) {
@@ -466,16 +456,6 @@ std::vector<std::pair<bool, int>> getVectorizedFusionInputOutput(
     auto pos = std::distance(fusion->outputs().begin(), consumer_it);
     vectorized_input_output.push_back(
         std::make_pair<bool, int>(false, static_cast<int>(pos)));
-  } else {
-    // If not fusion input, assume it's fully contiguous, so nothing
-    // to check with respect to strides.
-    TORCH_INTERNAL_ASSERT(
-        std::all_of(
-            consumer_tv->domain()->contiguity().begin(),
-            consumer_tv->domain()->contiguity().end(),
-            [](bool contig) { return contig; }),
-        "Unsupported pattern of vectorization: ",
-        consumer_tv->definition()->toString());
   }
 
   return vectorized_input_output;
@@ -617,11 +597,23 @@ void validateAlignedVectorizedFusionInputOutput(
   for (auto i = aten_tensor.ndimension() - 1; i >= 0; --i) {
     const auto stride = aten_tensor.strides().at(i);
     const auto size = aten_tensor.sizes().at(i);
+    auto root_id = tv->getMaybeRFactorDomain()[i];
+    const auto is_expanded_broadcasting =
+        root_id->isBroadcast() && root_id->hasExpandedExtent();
+
+    if (is_expanded_broadcasting) {
+      TORCH_INTERNAL_ASSERT(
+          stride == 0,
+          "Dimension ",
+          i,
+          " should be an expanded broadcasting, but it does not have stride zero.");
+    }
+
     // If this domain is contiguous or size == 1, then not necessary to check
     // the stride. Otherwise, stride must be 1 if it's rightmost or
     // divisible by word_size
     TORCH_INTERNAL_ASSERT(
-        stride == cur_contig_stride || size == 1 ||
+        stride == cur_contig_stride || size == 1 || is_expanded_broadcasting ||
             (still_rightmost && stride == 1) ||
             (!still_rightmost && stride % word_size == 0),
         "Vectorization of ",
@@ -635,7 +627,8 @@ void validateAlignedVectorizedFusionInputOutput(
         stride)
     // If the domain is size-1, the next domain is still considered
     // rightmost.
-    still_rightmost = still_rightmost && size == 1;
+    still_rightmost =
+        still_rightmost && (size == 1 || is_expanded_broadcasting);
     // We do not update cur_contig_stride for size==1 dimensions,
     // since we have specialized vectorization stride check for them
     if (size != 1) {
@@ -841,6 +834,8 @@ void bindInputForExprEvaluation(
                 *maybe_expanded_size,
                 " but recieved value of ",
                 tensor_arg_size);
+          } else {
+            expr_eval.bind(root_domain[dim]->expandedExtent(), tensor_arg_size);
           }
         }
 

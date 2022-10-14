@@ -305,9 +305,12 @@ static void Nvfuser_Matmul_8warp4stage(
 // ----------------------------- Benchmark Instantiation-------
 
 // Common utils:
+#define LegacyMatmulBenchmarks \
+  ArgsProduct({{2048}, {3456}, benchmark::CreateDenseRange(512, 4096, /*step=*/512)})
+
 // Those are the 25 most commonly used matmul shapes in TIMM and torchdynamo benchmark suites.
-// Nvfuser benchmark of some shapes with 1 in m, n, k sizes crash and those shapes are temporarily disabled. 
-#define NO_TILE_QUANTIZATION_ARGS      \
+// Nvfuser benchmark of some shapes with 1 in m, n, k sizes crash and those shapes are temporarily disabled.
+#define TIMM_SHAPES                    \
   Args({1024, 256, 1024})              \
   ->Args({8, 128, 8})                  \
   /*->Args({1, 128, 1})*/                  \
@@ -332,8 +335,12 @@ static void Nvfuser_Matmul_8warp4stage(
   ->Args({784, 72, 8})                 \
   ->Args({784, 8, 72})                 \
   /*->Args({1, 1, 2048})*/                 \
-  ->Args({1024, 1024, 1024})           \
-  ->Unit(benchmark::kMicrosecond)      \
+  ->Args({1024, 1024, 1024})
+
+#define NO_TILE_QUANTIZATION_ARGS       \
+  LegacyMatmulBenchmarks                \
+  ->TIMM_SHAPES                         \
+  ->Unit(benchmark::kMicrosecond)       \
   ->UseManualTime();
 
 #define ForAllLayouts(run)   \

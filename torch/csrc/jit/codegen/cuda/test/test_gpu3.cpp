@@ -6630,6 +6630,177 @@ TEST_F(NVFuserTest, FusionHuggingFaceRepro2064_CUDA) {
       "");
 }
 
+#ifndef USE_ROCM
+
+TEST_F(NVFuserTest, FusionCastings_CUDA) {
+  // TODO: this test is failing
+  auto fusion_ptr = std::make_unique<Fusion>();
+  Fusion& fusion = *fusion_ptr.get();
+  FusionGuard fg(&fusion);
+
+  int x = 4, y = 1024;
+
+  auto data_types = {
+      DataType::Double,
+      DataType::Float,
+      DataType::Half,
+      DataType::Int,
+      DataType::Int32,
+      DataType::Bool,
+      DataType::BFloat16,
+      DataType::ComplexFloat,
+      DataType::ComplexDouble};
+
+  for (auto input_type : data_types) {
+    auto tv_in = makeContigTensor(2, input_type);
+    fusion.addInput(tv_in);
+    for (auto output_type : data_types) {
+      auto tv_out = castOp(output_type, tv_in);
+      fusion.addOutput(tv_out);
+    }
+  }
+
+  auto options = at::TensorOptions().dtype(at::kFloat).device(at::kCUDA, 0);
+
+  std::vector<IValue> inputs;
+  std::vector<Tensor> outputs;
+  for (auto input_type : data_types) {
+    at::Tensor t = at::randn({x, y}, options).to(data_type_to_aten(input_type));
+    inputs.emplace_back(t);
+    for (auto output_type : data_types) {
+      outputs.emplace_back(t.to(data_type_to_aten(output_type)));
+    }
+  }
+
+  FusionExecutorCache executor_cache(std::move(fusion_ptr));
+  auto cg_outputs = executor_cache.runFusionWithInputs(inputs);
+
+  testValidate(
+      executor_cache.fusion(),
+      cg_outputs,
+      inputs,
+      outputs,
+      __LINE__,
+      __FILE__,
+      "");
+}
+
+TEST_F(NVFuserTest, FusionIssue2074_CUDA) {
+  auto fusion_ptr = std::make_unique<Fusion>();
+  Fusion& fusion = *fusion_ptr.get();
+  FusionGuard fg(&fusion);
+
+  int x = 4, y = 1024;
+
+  auto tv0 = makeContigTensor(2, DataType::Int32);
+  fusion.addInput(tv0);
+  auto tv1 = ne(tv0, IrBuilder::create<Int>(0));
+  auto tv2 = castOp(DataType::Int32, tv1);
+  auto tv3 = sum(tv2, {1});
+  auto tv4 = sub(tv3, IrBuilder::create<Int>(1));
+  fusion.addOutput(tv0);
+  fusion.addOutput(tv4);
+
+  auto options = at::TensorOptions().dtype(at::kFloat).device(at::kCUDA, 0);
+
+  at::Tensor t0 = at::randn({x, y}, options).to(at::kInt);
+  auto t1 = t0.ne(0);
+  auto t2 = t1.to(at::kInt);
+  auto t3 = t2.sum({1});
+  auto t4 = t3 - 1;
+
+  FusionExecutorCache executor_cache(std::move(fusion_ptr));
+  auto cg_outputs = executor_cache.runFusionWithInputs({t0});
+  ASSERT_TRUE(at::allclose(cg_outputs[1], t4));
+}
+
+TEST_F(NVFuserTest, FusionIssue2077_CUDA) {
+  auto fusion_ptr = std::make_unique<Fusion>();
+  Fusion& fusion = *fusion_ptr.get();
+  FusionGuard fg(&fusion);
+
+  auto tv0 = makeContigTensor(3, DataType::Half);
+  fusion.addInput(tv0);
+
+  auto tv1 = castOp(DataType::Float, tv0);
+  auto tv3 = mul(tv1, IrBuilder::create<Int>(1));
+  auto tv5 = sub(IrBuilder::create<Double>(1.), tv3);
+  auto tv6 = castOp(DataType::Half, tv5);
+  auto tv7 = castOp(DataType::Bool, tv6);
+
+  fusion.addOutput(tv7);
+
+  auto options = at::TensorOptions().dtype(at::kHalf).device(at::kCUDA, 0);
+
+  at::Tensor t0 = at::randn({2, 4, 6}, options);
+  auto t1 = t0.to(at::kFloat);
+  auto t3 = t1 * 1;
+  auto t5 = 1 - t3;
+  auto t6 = t5.to(at::kHalf);
+  auto t7 = t6.to(at::kBool);
+
+  FusionExecutorCache executor_cache(std::move(fusion_ptr));
+  auto cg_outputs = executor_cache.runFusionWithInputs({t0});
+  ASSERT_TRUE(at::equal(cg_outputs[0], t7));
+}
+
+#endif
+
+TEST_F(NVFuserTest, FusionIssue2075_CUDA) {
+  auto fusion_ptr = std::make_unique<Fusion>();
+  Fusion& fusion = *fusion_ptr.get();
+  FusionGuard fg(&fusion);
+
+  int x = 2, y = 128, z = 128;
+
+  auto tv0 = makeContigConcreteTensor({1, -1, 1});
+  fusion.addInput(tv0);
+  auto tv1 = makeContigConcreteTensor({1, 1, -1});
+  fusion.addInput(tv1);
+
+  auto tv2 = set(tv0);
+  auto tv3 = expand(
+      tv2,
+      {IrBuilder::create<Int>(x),
+       tv2->axis(1)->extent(),
+       IrBuilder::create<Int>(z)});
+
+  // [1, 1, 128] -> [1, 1, 1, 1, 1, 128]
+  auto tv4 = broadcast(tv1, {{false, false, true, true, true, false}});
+  // [1, 1, 1, 1, 1, 128] -> [2, 128, 1, 1, 1, 128]
+  auto tv5 = expand(
+      tv4,
+      {IrBuilder::create<Int>(x),
+       IrBuilder::create<Int>(y),
+       tv4->axis(2)->extent(),
+       tv4->axis(3)->extent(),
+       tv4->axis(4)->extent(),
+       tv4->axis(5)->extent()});
+  auto tv6 = set(tv5);
+  // [2, 128, 1, 1, 1, 128] -> [2, 1, 128, 1, 1, 128]
+  auto tv7 = permute(tv6, {0, 3, 1, 2, 4, 5});
+  auto tv8 = sum(tv7, {1, 3, 4});
+  auto tv9 = le(tv8, tv3);
+  auto tv10 = castOp(DataType::Float, tv9);
+  fusion.addOutput(tv10);
+
+  auto options = at::TensorOptions().dtype(at::kFloat).device(at::kCUDA, 0);
+
+  at::Tensor t0 = at::randn({1, y, 1}, options);
+  at::Tensor t1 = at::randn({1, 1, z}, options);
+  auto t3 = t0.expand({x, y, z});
+  auto t4 = t1.unsqueeze(-2).unsqueeze(-2).unsqueeze(-2);
+  auto t5 = t4.expand({x, y, 1, 1, 1, z});
+  auto t7 = t5.permute({0, 3, 1, 2, 4, 5});
+  auto t8 = t7.squeeze(-2).squeeze(-2).squeeze(-3);
+  auto t9 = t8 < t3;
+  auto t10 = t9.to(at::kFloat);
+
+  FusionExecutorCache executor_cache(std::move(fusion_ptr));
+  auto cg_outputs = executor_cache.runFusionWithInputs({t0, t1});
+  testValidate(&fusion, cg_outputs, {t0, t1}, {t10}, __LINE__, __FILE__);
+}
+
 // Test file size should be up to 10K LoC. Create a new file for more tests.
 
 } // namespace jit

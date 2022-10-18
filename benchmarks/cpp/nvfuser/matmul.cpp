@@ -305,12 +305,14 @@ static void Nvfuser_Matmul_8warp4stage(
 // ----------------------------- Benchmark Instantiation-------
 
 // Common utils:
-#define LegacyMatmulBenchmarks \
-  ArgsProduct({{2048}, {3456}, benchmark::CreateDenseRange(512, 4096, /*step=*/512)})
+#define LegacyMatmulShapes \
+  ArgsProduct({{2048}, {3456}, benchmark::CreateDenseRange(512, 4096, /*step=*/512)}) \
+  ->Unit(benchmark::kMicrosecond)                                                     \
+  ->UseManualTime();
 
 // Those are the 25 most commonly used matmul shapes in TIMM and torchdynamo benchmark suites.
 // Nvfuser benchmark of some shapes with 1 in m, n, k sizes crash and those shapes are temporarily disabled.
-#define TIMM_SHAPES                    \
+#define TIMMMatmulShapes               \
   Args({1024, 256, 1024})              \
   ->Args({8, 128, 8})                  \
   /*->Args({1, 128, 1})*/                  \
@@ -335,52 +337,51 @@ static void Nvfuser_Matmul_8warp4stage(
   ->Args({784, 72, 8})                 \
   ->Args({784, 8, 72})                 \
   /*->Args({1, 1, 2048})*/                 \
-  ->Args({1024, 1024, 1024})
-
-#define NO_TILE_QUANTIZATION_ARGS       \
-  LegacyMatmulBenchmarks                \
-  ->TIMM_SHAPES                         \
+  ->Args({1024, 1024, 1024})           \
   ->Unit(benchmark::kMicrosecond)       \
   ->UseManualTime();
 
 #define ForAllLayouts(run)   \
-  run(TT, MatmulLayout::TT); \
-  run(TN, MatmulLayout::TN); \
-  run(NT, MatmulLayout::NT)
+  run(TT_Legacy, MatmulLayout::TT, LegacyMatmulShapes); \
+  run(TN_Legacy, MatmulLayout::TN, LegacyMatmulShapes); \
+  run(NT_Legacy, MatmulLayout::NT, LegacyMatmulShapes); \
+  run(TT_TIMM, MatmulLayout::TT, TIMMMatmulShapes); \
+  run(TN_TIMM, MatmulLayout::TN, TIMMMatmulShapes); \
+  run(NT_TIMM, MatmulLayout::NT, TIMMMatmulShapes)
 
 // Instantiations:
-#define Nvfuser_4warp3stage_test(layout_label, layout) \
-  BENCHMARK_CAPTURE(                                   \
-      Nvfuser_Matmul_4warp3stage,                      \
-      no_quant_nvfuser_4warp_##layout_label,           \
-      layout)                                          \
-      ->NO_TILE_QUANTIZATION_ARGS
+#define Nvfuser_4warp3stage_test(layout_label, layout, shapes)  \
+  BENCHMARK_CAPTURE(                                            \
+      Nvfuser_Matmul_4warp3stage,                               \
+      no_quant_nvfuser_4warp_##layout_label,                    \
+      layout)                                                   \
+      ->shapes
 
-#define Nvfuser_8warp3stage_test(layout_label, layout) \
-  BENCHMARK_CAPTURE(                                   \
-      Nvfuser_Matmul_8warp3stage,                      \
-      no_quant_nvfuser_8warp_##layout_label,           \
-      layout)                                          \
-      ->NO_TILE_QUANTIZATION_ARGS
+#define Nvfuser_8warp3stage_test(layout_label, layout, shapes)  \
+  BENCHMARK_CAPTURE(                                            \
+      Nvfuser_Matmul_8warp3stage,                               \
+      no_quant_nvfuser_8warp_##layout_label,                    \
+      layout)                                                   \
+      ->shapes
 
-#define Nvfuser_4warp4stage_test(layout_label, layout) \
-  BENCHMARK_CAPTURE(                                   \
-      Nvfuser_Matmul_4warp4stage,                      \
-      no_quant_nvfuser_4warp_##layout_label,           \
-      layout)                                          \
-      ->NO_TILE_QUANTIZATION_ARGS
+#define Nvfuser_4warp4stage_test(layout_label, layout, shapes)  \
+  BENCHMARK_CAPTURE(                                            \
+      Nvfuser_Matmul_4warp4stage,                               \
+      no_quant_nvfuser_4warp_##layout_label,                    \
+      layout)                                                   \
+      ->shapes
 
-#define Nvfuser_8warp4stage_test(layout_label, layout) \
-  BENCHMARK_CAPTURE(                                   \
-      Nvfuser_Matmul_8warp4stage,                      \
-      no_quant_nvfuser_8warp_##layout_label,           \
-      layout)                                          \
-      ->NO_TILE_QUANTIZATION_ARGS
+#define Nvfuser_8warp4stage_test(layout_label, layout, shapes)  \
+  BENCHMARK_CAPTURE(                                            \
+      Nvfuser_Matmul_8warp4stage,                               \
+      no_quant_nvfuser_8warp_##layout_label,                    \
+      layout)                                                   \
+      ->shapes
 
-#define Eagermode_test(layout_label, layout)                      \
+#define Eagermode_test(layout_label, layout, shapes)              \
   BENCHMARK_CAPTURE(                                              \
       EagerModeMatmul, no_quant_eagermode_##layout_label, layout) \
-      ->NO_TILE_QUANTIZATION_ARGS
+      ->shapes
 
 ForAllLayouts(Nvfuser_4warp3stage_test);
 ForAllLayouts(Nvfuser_4warp4stage_test);

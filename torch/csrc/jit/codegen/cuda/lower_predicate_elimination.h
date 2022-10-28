@@ -38,6 +38,10 @@ class TORCH_CUDA_CU_API PredicateElimination : public IterVisitor {
   //  global info to reliably track.
   void propagateRemovalInfo(const Expr* from, const Expr* to);
 
+  const std::unordered_set<const Expr*>& getNonPredicatedExprs() const {
+    return non_predicated_exprs_;
+  }
+
  private:
   using IterVisitor::handle;
 

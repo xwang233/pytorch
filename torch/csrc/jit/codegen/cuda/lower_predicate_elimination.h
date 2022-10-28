@@ -13,7 +13,7 @@ namespace cuda {
 
 class TORCH_CUDA_CU_API PredicateElimination : public IterVisitor {
  public:
-  void build(Fusion* fusion);
+  PredicateElimination(Fusion* fusion);
 
   //! True if expr does not need a predicate
   //!

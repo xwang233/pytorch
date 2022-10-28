@@ -829,6 +829,10 @@ class PredicateChcker : public IterVisitor {
 
 } // namespace
 
+PredicateElimination::PredicateElimination(Fusion* fusion) {
+  traverseTo(fusion, fusion->outputs());
+}
+
 bool PredicateElimination::needsPredicate(Expr* expr) const {
   return PredicateChcker::needsPredicate(expr, non_predicated_exprs_);
 }
@@ -988,10 +992,6 @@ Val* PredicateElimination::getInitValue(TensorView* tv) const {
   } else {
     return init_val;
   }
-}
-
-void PredicateElimination::build(Fusion* fusion) {
-  traverseTo(fusion, fusion->outputs());
 }
 
 std::string PredicateElimination::toString() const {

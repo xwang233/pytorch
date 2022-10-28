@@ -313,10 +313,6 @@ void GpuLower::lower(Fusion* fusion, DataType index_type) {
 
   nonDivisibleSplitInfo().build(fusion_);
 
-  // Detects all exprssions that don't need predicates. Depends on
-  // nonDivisibleSplitInfo.
-  predicateElimination().build(fusion_);
-
   doubleBufferInfo().build(fusion_);
 
   compute_at_map_->allocateIndexVariables();
@@ -334,6 +330,10 @@ void GpuLower::lower(Fusion* fusion, DataType index_type) {
   // Replace trivial reductions, Transpose, Shift, Gather, and View ops with
   // unary ops since they're not separately processed in lowering.
   const auto exprs_unary_replaced = unarySetOpInserter(exprs_lowered);
+
+  // Detects all exprssions that don't need predicates. Depends on
+  // nonDivisibleSplitInfo.
+  pred_elimination_ = std::make_unique<PredicateElimination>(fusion_);
 
   // Insert allocations
   const auto exprs_alloced = insertAllocations(exprs_unary_replaced);
@@ -405,7 +405,7 @@ bool GpuLower::hasCurrent() {
 }
 
 void GpuLower::propagateExprInfo(const Expr* old_expr, const Expr* new_expr) {
-  pred_elimination_.propagateRemovalInfo(old_expr, new_expr);
+  predicateElimination().propagateRemovalInfo(old_expr, new_expr);
 }
 
 } // namespace cuda

@@ -231,9 +231,7 @@ class FakeTensorConverter(object):
                     constant=t if make_constant else None,
                 )
 
-        out = self.meta_converter(
-            t, shape_env=shape_env, strict=True, callback=mk_fake_tensor
-        )
+        out = self.meta_converter(t, shape_env=shape_env, callback=mk_fake_tensor)
         if out is NotImplemented:
             raise UnsupportedFakeTensorException("meta converter nyi")
         if make_constant:
@@ -719,7 +717,11 @@ class FakeTensorMode(TorchDispatchMode):
 
         # Some attribute queries that can be serviced directly
         # See Note [is_coalesced is dispatched]
-        if func in [torch.ops.aten.is_coalesced.default]:
+        if func in {
+            torch.ops.aten.is_coalesced.default,
+            torch.ops.aten.dense_dim.default,
+            torch.ops.aten.sparse_dim.default,
+        }:
             # NB: no_dispatch is ok here too, this func is very simple
             with in_kernel_invocation_manager(self):
                 return func(*args, **kwargs)

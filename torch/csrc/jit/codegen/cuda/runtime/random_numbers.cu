@@ -46,7 +46,7 @@ __device__ uint4 philox(
 
 __device__ float uniformf(unsigned int x) {
   constexpr float kRanInvM32 = 2.3283064e-10f; // Inverse of 2^32.
-  float result = x * kRanInvM32;
+  float result = x * kRanInvM32 + kRanInvM32 / 2.0f;
   return result == 1 ? 0.0f : result;
 }
 

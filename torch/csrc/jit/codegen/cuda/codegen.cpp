@@ -776,6 +776,9 @@ class CudaKernelGenerator : private OptOutConstDispatch {
     // innermost ID of size 4 (float) or size 2 (double)?
     auto index = genTensorIndex(rop->getPhiloxIndex()->as<kir::TensorIndex>());
     int multiple = rop->dtype() == DataType::Double ? 2 : 4;
+    if (rop->getRNGOpType() == RNGOpType::NormalRange) {
+      multiple /= 2;
+    }
     indent() << "nvfuser_index_t linear_index" << rop->name() << " = " << index
              << ";\n";
     indent() << "nvfuser_index_t rng_subseq" << rop->name() << " = linear_index"

@@ -92,13 +92,7 @@ __device__ float normalf(unsigned int x, unsigned int y) {
   float u = uniformf(x);
   float v = uniformf(y) * 6.2831855f;
 
-  float result;
-  result = sqrtf(-2.0f * logf(u)) * sinf(v);
-
-  // result.x = sqrtf(-2.0f * logf(u)) * sinf(v);
-  // result.y = sqrtf(-2.0f * logf(u)) * cosf(v);
-
-  return result;
+  return sqrtf(-2.0f * logf(u)) * sinf(v);
 }
 
 __device__ double normal(unsigned int x0, unsigned int x1,
@@ -106,30 +100,21 @@ __device__ double normal(unsigned int x0, unsigned int x1,
   double u = uniform(x0, x1);
   double v = uniform(y0, y1) * 6.2831853071795860;
 
-  double result;
-  result = sqrt(-2.0 * log(u)) * sin(v);
-  // result.x = sqrt(-2.0 * log(u)) * sin(v);
-  // result.y = sqrt(-2.0 * log(u)) * cos(v);
-
-  return result;
+  return sqrt(-2.0 * log(u)) * sin(v);
 }
 
 __device__ double rng_normal_standard(
     const uint4& rng_result,
     int rng_component) {
-  return normal(
-    (&rng_result.x)[rng_component * 2],
-    (&rng_result.x)[rng_component * 2 + 1],
-    (&rng_result.y)[rng_component * 2],
-    (&rng_result.y)[rng_component * 2 + 1]);
+  return normal(rng_result.x, rng_result.y, rng_result.z, rng_result.w);
 }
 
 __device__ float rng_normal_standardf(
     const uint4& rng_result,
     int rng_component) {
   return normalf(
-    (&rng_result.x)[rng_component],
-    (&rng_result.y)[rng_component]);
+    (&rng_result.x)[rng_component * 2],
+    (&rng_result.y)[rng_component * 2]);
 }
 
 __device__ double rng_normal_range(

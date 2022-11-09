@@ -107,6 +107,23 @@ def meta_copy_(self, src, non_blocking=False):
     return self
 
 
+def inferUnsqueezeGeometry(tensor, dim):
+    result_sizes = list(tensor.size())
+    result_strides = list(tensor.stride())
+    new_stride = 1 if dim >= tensor.dim() else result_sizes[dim] * result_strides[dim]
+    result_sizes.insert(dim, 1)
+    result_strides.insert(dim, new_stride)
+    return result_sizes, result_strides
+
+
+@register_meta(aten.unsqueeze_.default)
+def meta_unsqueeze_(self, dim):
+    dim = maybe_wrap_dim(dim, self.dim() + 1)
+    g_sizes, g_strides = inferUnsqueezeGeometry(self, dim)
+    self.as_strided_(g_sizes, g_strides)
+    return self
+
+
 # Implementations below are taken from https://github.com/albanD/subclass_zoo/blob/main/python_meta_tensor.py
 @register_meta(aten.index_select.default)
 def meta_index_select(self, dim, index):
@@ -252,9 +269,22 @@ def meta_pad2d(self, padding):
         return self.new_empty((nbatch, nplane, output_h, output_w))
 
 
+@register_meta([aten.bernoulli.default, aten.bernoulli.out])
+@out_wrapper()
+def meta_bernoulli(self, *, generator=None):
+    # https://github.com/pytorch/pytorch/issues/88612
+    return torch.empty_like(self).contiguous()
+
+
 @register_meta(aten.bernoulli_.float)
 def meta_bernoulli_(self, p=0.5, generator=None):
     return self
+
+
+@register_meta(aten.bernoulli.p)
+def meta_bernoulli_p(self, p=0.5, generator=None):
+    # https://github.com/pytorch/pytorch/issues/88612
+    return torch.empty_like(self).contiguous()
 
 
 @register_meta(aten._fused_moving_avg_obs_fq_helper.default)
@@ -309,12 +339,6 @@ def _compute_reduction_shape(self, dims, keepdim):
         return tuple(self.shape[i] if i not in dims else 1 for i in range(self.ndim))
 
     return utils.compute_reduction_output_shape(self.shape, dims)
-
-
-@register_meta(aten.bernoulli.out)
-def meta_bernoulli(self, *, generator=None, out):
-    torch._resize_output_(out, self.size(), self.device)
-    return out
 
 
 # FakeTensors (meta tensors with a device) will report device as meta
@@ -1112,6 +1136,33 @@ def meta_repeat(self, repeats):
 
 @register_meta(aten.zero_.default)
 def meta_zero_(self):
+    return self
+
+
+@register_meta(
+    [
+        aten.mul_.Scalar,
+        aten.div_.Scalar,
+        aten.mul_.Tensor,
+        aten.div_.Tensor,
+        aten.logical_and_.default,
+        aten.logical_or_.default,
+        aten.logical_xor_.default,
+    ],
+)
+def meta_binop_inplace(self, other):
+    return self
+
+
+@register_meta(
+    [
+        aten.add_.Scalar,
+        aten.sub_.Scalar,
+        aten.add_.Tensor,
+        aten.sub_.Tensor,
+    ],
+)
+def meta_binop_inplace_alpha(self, other, alpha=1):
     return self
 
 

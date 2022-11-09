@@ -394,8 +394,6 @@ void testValidate(
 
     if (aten_output_tensor.is_floating_point() ||
         aten_output_tensor.is_complex()) {
-      std::cout << "aten " << aten_output_tensor << std::endl;
-      std::cout << "fusion " << fusion_output_tensor << std::endl;
       TORCH_INTERNAL_ASSERT(
           aten_output_tensor.allclose(
               fusion_output_tensor.to(aten_output_tensor.dtype()),

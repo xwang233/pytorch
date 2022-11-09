@@ -65,7 +65,46 @@ __global__ void generate_uniform_kernel(
   }
 }
 
-at::Tensor generate_uniform(int64_t size, at::ScalarType dtype) {
+template <typename T>
+__global__ void generate_normal_kernel(
+    T* output,
+    int64_t size,
+    PhiloxCudaState philox_args) {
+  int64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  auto seeds = at::cuda::philox::unpack(philox_args);
+  curandStatePhilox4_32_10_t state;
+  curand_init(std::get<0>(seeds), tid, std::get<1>(seeds), &state);
+
+  if (std::is_same<T, double>::value) {
+    double2 result = curand_normal2_double(&state);
+    if (tid * 2 < size) {
+      output[tid * 2] = result.x;
+    }
+    if (tid * 2 + 1 < size) {
+      output[tid * 2 + 1] = result.y;
+    }
+  } else {
+    auto is_float = std::is_same<T, float>::value;
+    assert(is_float);
+    float4 result = curand_normal4(&state);
+    if (tid * 4 < size) {
+      output[tid * 4] = result.x;
+    }
+    if (tid * 4 + 1 < size) {
+      output[tid * 4 + 1] = result.y;
+    }
+    if (tid * 4 + 2 < size) {
+      output[tid * 4 + 2] = result.z;
+    }
+    if (tid * 4 + 3 < size) {
+      output[tid * 4 + 3] = result.w;
+    }
+  }
+}
+
+template <typename func_float_t, typename func_double_t>
+at::Tensor generate_random_numbers(int64_t size, at::ScalarType dtype, func_float_t rng_float_kernel, func_double_t rng_double_kernel) {
   auto options = at::TensorOptions().dtype(dtype).device(at::kCUDA, 0);
   auto result = at::empty({size}, options);
 
@@ -82,7 +121,7 @@ at::Tensor generate_uniform(int64_t size, at::ScalarType dtype) {
     int64_t block = 128;
     int64_t block_elems = block * 4;
     int64_t grid = (size + block_elems - 1) / block_elems;
-    generate_uniform_kernel<<<
+    rng_float_kernel<<<
         grid,
         block,
         0,
@@ -93,7 +132,7 @@ at::Tensor generate_uniform(int64_t size, at::ScalarType dtype) {
     int64_t block = 128;
     int64_t block_elems = block * 2;
     int64_t grid = (size + block_elems - 1) / block_elems;
-    generate_uniform_kernel<<<
+    rng_double_kernel<<<
         grid,
         block,
         0,
@@ -101,6 +140,14 @@ at::Tensor generate_uniform(int64_t size, at::ScalarType dtype) {
         result.data_ptr<double>(), size, rng_engine_inputs);
   }
   return result;
+}
+
+at::Tensor generate_uniform(int64_t size, at::ScalarType dtype) {
+  return generate_random_numbers(size, dtype, generate_uniform_kernel<float>, generate_uniform_kernel<double>);
+}
+
+at::Tensor generate_normal(int64_t size, at::ScalarType dtype) {
+  return generate_random_numbers(size, dtype, generate_normal_kernel<float>, generate_normal_kernel<double>);
 }
 
 } // namespace
@@ -354,6 +401,42 @@ TEST_F(NVFuserTest, FusionUniform_CUDA) {
     at::manual_seed(0);
     auto ref0 = generate_uniform(size, kFloat) * 2 - 1;
     auto ref1 = generate_uniform(size, kDouble) * 2 - 1;
+
+    testValidate(
+        fec.fusion(),
+        cg_outputs,
+        {size, -1.0, 1.0},
+        {ref0, ref1},
+        __LINE__,
+        __FILE__);
+  }
+}
+
+TEST_F(NVFuserTest, FusionNormal_CUDA) {
+  std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
+  auto fusion = fusion_ptr.get();
+  FusionGuard fg(fusion);
+
+  Int* size_val = IrBuilder::create<Int>();
+  Double* mean = IrBuilder::create<Double>();
+  Double* std = IrBuilder::create<Double>();
+  fusion->addInput(size_val);
+  fusion->addInput(mean);
+  fusion->addInput(std);
+  TensorView* tv0 = normal({size_val}, mean, std, DataType::Float);
+  TensorView* tv1 = normal({size_val}, mean, std, DataType::Double);
+  fusion->addOutput(tv0);
+  fusion->addOutput(tv1);
+
+  FusionExecutorCache fec(std::move(fusion_ptr));
+
+  for (int64_t size : {16, 1024, 10001, 10002, 10003, 100000, 10000001}) {
+    at::manual_seed(0);
+    auto cg_outputs = fec.runFusionWithInputs({size, 3.0, 5.0});
+
+    at::manual_seed(0);
+    auto ref0 = generate_normal(size, kFloat) * 5.0 + 3.0;
+    auto ref1 = generate_normal(size, kDouble) * 5.0 + 3.0;
 
     testValidate(
         fec.fusion(),

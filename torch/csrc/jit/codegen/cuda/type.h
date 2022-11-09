@@ -255,6 +255,8 @@ enum class BinaryOpType {
 enum class RNGOpType {
   Uniform, // Uniform in [0, 1)
   UniformRange, // Uniform in [low, high]
+  Normal, // Normal with mean 0, std 1
+  NormalRange, // Normal with given mean and std
 };
 
 // Return if output of operator should be a boolean

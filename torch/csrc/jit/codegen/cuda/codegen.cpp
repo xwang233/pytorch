@@ -807,6 +807,12 @@ class CudaKernelGenerator : private OptOutConstDispatch {
         code_ << ", " << gen(parameters[0]) << ", " << gen(parameters[1]);
         break;
       }
+      case RNGOpType::NormalRange: {
+        auto parameters = rop->getParameters();
+        TORCH_INTERNAL_ASSERT(parameters.size() == 2);
+        code_ << ", " << gen(parameters[0]) << ", " << gen(parameters[1]);
+        break;
+      }
       default:;
     }
     code_ << ");\n";

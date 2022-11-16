@@ -215,10 +215,6 @@ TensorView::TensorView(const TensorView* src, IrCloner* ir_cloner)
       cpu_scalar_(src->cpu_scalar_),
       has_swizzle_op_(src->has_swizzle_op_) {}
 
-bool TensorView::hasAnyReduction() const {
-  return domain()->noReductions().size() != domain()->domain().size();
-}
-
 bool TensorView::hasReduction() const {
   return domain()->hasReduction();
 }
@@ -1049,6 +1045,10 @@ TensorView* TensorView::cacheAfter(c10::optional<LoadStoreOpType> cache_op) {
   TORCH_CHECK(
       !hasComputeAt(),
       "Caching computed-at tensors is not allowed. Apply caching before computeAt.");
+
+  TORCH_CHECK(
+      !ir_utils::isSelectInput(this),
+      "Right now, caching tensors that are input to the select op is not allowed as they must be in global memory.")
 
   // It also did additional transformation when this tensor is an
   // input and the outputs of its consumers have computeAt. Make sure

@@ -89,6 +89,11 @@ std::unordered_map<IterDomain*, IterDomain*> PairwiseRootDomainMap::map(
     squeeze_flags = sop->getSqueezeDimFlags();
   }
 
+  IterDomain* selected_id = nullptr;
+  if (SelectOp* sop = dynamic_cast<SelectOp*>(consumer_tv_->definition())) {
+    selected_id = sop->getSelectAxis();
+  }
+
   std::unordered_map<IterDomain*, IterDomain*> dom_map;
   const auto producer_root =
       TensorDomain::noReductions(producer->getMaybeRFactorDomain());
@@ -97,6 +102,13 @@ std::unordered_map<IterDomain*, IterDomain*> PairwiseRootDomainMap::map(
   while (itc < consumer_root.size() && itp < producer_root.size()) {
     IterDomain* producer_id = producer_root[itp];
     IterDomain* consumer_id = consumer_root[itc];
+
+    // When the producer ID is the dim of a SelectOp, there is no
+    // mapping for it.
+    if (producer_id == selected_id) {
+      itp++;
+      continue;
+    }
 
     // When the consumer ID is a new broadcast domain, there is no
     // mapping for it.
@@ -115,8 +127,7 @@ std::unordered_map<IterDomain*, IterDomain*> PairwiseRootDomainMap::map(
     }
 
     // In exact mapping, do not map broadcast domains with
-    // non-broadcast domains, except with a broadcast producer and a
-    // consumer trivial reduction
+    // non-broadcast domains
     if (is_exact_ && producer_id->isBroadcast() != consumer_id->isBroadcast()) {
       itc++;
       itp++;
@@ -480,13 +491,9 @@ bool ComputeAtRootDomainMap::canMap(
       const bool mappable = canMap(key_a, key_b);
       mappable_pair_found = mappable_pair_found || mappable;
       // If both concrete IDs are not broadcast, they must be
-      // mappable. Also, if either of the concrete IDs is a reduction,
-      // that means a trivial reduction (i.e., broadcast immediately
-      // followed by reduction), which does not prevent any mapping.
+      // mappable.
       if (!key_a.concreteId()->isBroadcast() &&
-          !key_b.concreteId()->isBroadcast() &&
-          !key_a.concreteId()->isReduction() &&
-          !key_b.concreteId()->isReduction() && !mappable) {
+          !key_b.concreteId()->isBroadcast() && !mappable) {
         return false;
       }
     }
@@ -527,12 +534,7 @@ bool ComputeAtRootDomainMap::canMap(
     const bool mappable = canMap(key_a, key_b);
     mappable_pair_found = mappable_pair_found || mappable;
     // If both concrete IDs are not broadcast, they must be mappable.
-    // However, if key_b's concrete ID is a reduction, the concrete ID
-    // is a result of a trivial reduction, so it should not prevent
-    // any other mapping. Similarly, if key_a is a reduction, it just
-    // needs to find any concrete ID of key_b that can be mapped.
-    if (!key_a_bcast && !key_b.concreteId()->isBroadcast() &&
-        !key_b.concreteId()->isReduction() && !key_a_reduction && !mappable) {
+    if (!key_a_bcast && !key_b.concreteId()->isBroadcast() && !mappable) {
       return false;
     }
   }

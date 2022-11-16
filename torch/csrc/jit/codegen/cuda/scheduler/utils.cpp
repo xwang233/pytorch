@@ -453,6 +453,9 @@ PersistentBufferInfo persistentBuffers(Fusion* fusion) {
     std::vector<TensorView*> unmappable_consumers;
 
     for (auto consumer : consumers) {
+      if (dynamic_cast<SelectOp*>(consumer->definition())) {
+        continue;
+      }
       bool consumer_mappable = true;
       auto mappable_roots =
           root_map.getMappableDims(producer->domain(), consumer->domain());
@@ -551,7 +554,7 @@ TvProperties getProperties(
   auto root_dom = tv->getRootDomain();
   bool fastest_dim_reduction = true;
 
-  // Is there a non trivial reduction on the inner most dimension or is there an
+  // Is there a reduction on the inner most dimension or is there an
   // iteration domain.
   for (size_t i = root_dom.size(); i > 0; i--) {
     if (root_dom[i - 1]->isBroadcast()) {
@@ -972,7 +975,10 @@ std::vector<TensorView*> cacheInputs(Fusion* fusion, bool unroll) {
   // If we're going to unroll, make a cache of the inputs
   auto in_tvs = ir_utils::filterByType<TensorView>(fusion->inputs());
   for (auto tv : in_tvs) {
-    if (tv->uses().empty() || tv->isFusionOutput()) {
+    if (tv->uses().empty() || tv->isFusionOutput() ||
+        ir_utils::isSelectInput(tv)) {
+      // Right now, tensors that are input to the select op can't be cached as
+      // they must be in global memory.
       continue;
     }
     auto cached_tv = tv->cacheAfter();
@@ -1413,7 +1419,6 @@ BroadcastMultipleInformation getBroadcastMultiples(
 
   // We always cacheBefore output at the beginning of the scheduling. And after
   // cacheBefore, the reference tensor will have all reduction IDs removed.
-  // TODO: clean this up when we kill trivial reduction.
   auto ref_root_domain =
       TensorDomain::noReductions(reference_tv->getMaybeRFactorDomain());
 
@@ -1450,8 +1455,7 @@ BroadcastMultipleInformation getBroadcastMultiples(
     for (const auto ref_i : c10::irange(ref_root_domain.size())) {
       auto ref_id = ref_root_domain[ref_i];
 
-      // If reference id is broadcast or reduction
-      if (ref_id->isBroadcast() || ref_id->isReduction()) {
+      if (ref_id->isBroadcast()) {
         continue;
       }
 
@@ -1487,7 +1491,7 @@ BroadcastMultipleInformation getBroadcastMultiples(
       }
 
       if (std::all_of(mapped_ids.begin(), mapped_ids.end(), [](IterDomain* id) {
-            return id->isReduction() || id->isBroadcast();
+            return id->isBroadcast();
           })) {
         continue;
       }

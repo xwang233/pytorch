@@ -127,7 +127,7 @@ __device__ float rng_normal_standardf(
     rng_component);
 }
 
-__device__ double rng_normal_range(
+__device__ double rng_normal_general(
     const uint4& rng_result,
     int rng_component,
     double mean,
@@ -136,7 +136,7 @@ __device__ double rng_normal_range(
   return normal01 * std + mean;
 }
 
-__device__ float rng_normal_rangef(
+__device__ float rng_normal_generalf(
     const uint4& rng_result,
     int rng_component,
     float mean,

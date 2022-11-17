@@ -518,7 +518,7 @@ TensorView* normal(
                  .shape(shape)
                  .build();
   IrBuilder::create<RNGOp>(
-      RNGOpType::NormalRange, out, dtype, std::vector<Val*>{mean, std});
+      RNGOpType::NormalGeneral, out, dtype, std::vector<Val*>{mean, std});
   return out;
 }
 

@@ -442,7 +442,7 @@ TEST_F(NVFuserTest, FusionNormal_CUDA) {
     testValidate(
         fec.fusion(),
         cg_outputs,
-        {size, -1.0, 1.0},
+        {size, 1.0, 0.5},
         {ref0, ref1},
         __LINE__,
         __FILE__);

@@ -78,26 +78,34 @@ __global__ void generate_normal_kernel(
 
   if (std::is_same<T, double>::value) {
     double2 result = curand_normal2_double(&state);
-    if (tid < size) {
-      output[tid] = result.x;
+    if (tid * 2 < size) {
+      output[tid * 2] = result.x;
+    }
+    if (tid * 2 + 1 < size) {
+      output[tid * 2 + 1] = result.y;
     }
   } else {
     auto is_float = std::is_same<T, float>::value;
     assert(is_float);
     float4 result = curand_normal4(&state);
-    if (tid * 2 < size) {
-      output[tid * 2] = result.x;
+    if (tid * 4 < size) {
+      output[tid * 4] = result.x;
     }
-    if (tid * 2 + 1 < size) {
-      output[tid * 2 + 1] = result.z;
+    if (tid * 4 + 1 < size) {
+      output[tid * 4 + 1] = result.y;
+    }
+    if (tid * 4 + 2 < size) {
+      output[tid * 4 + 2] = result.z;
+    }
+    if (tid * 4 + 3 < size) {
+      output[tid * 4 + 3] = result.w;
     }
   }
 }
 
 template <typename func_float_t, typename func_double_t>
 at::Tensor generate_random_numbers(int64_t size, at::ScalarType dtype,
-    func_float_t rng_float_kernel, func_double_t rng_double_kernel,
-    int rng_per_state_float, int rng_per_state_double) {
+    func_float_t rng_float_kernel, func_double_t rng_double_kernel) {
   auto options = at::TensorOptions().dtype(dtype).device(at::kCUDA, 0);
   auto result = at::empty({size}, options);
 
@@ -112,7 +120,7 @@ at::Tensor generate_random_numbers(int64_t size, at::ScalarType dtype,
 
   if (dtype == kFloat) {
     int64_t block = 128;
-    int64_t block_elems = block * rng_per_state_float;
+    int64_t block_elems = block * 4;
     int64_t grid = (size + block_elems - 1) / block_elems;
     rng_float_kernel<<<
         grid,
@@ -123,7 +131,7 @@ at::Tensor generate_random_numbers(int64_t size, at::ScalarType dtype,
   } else {
     TORCH_CHECK(dtype == kDouble);
     int64_t block = 128;
-    int64_t block_elems = block * rng_per_state_double;
+    int64_t block_elems = block * 2;
     int64_t grid = (size + block_elems - 1) / block_elems;
     rng_double_kernel<<<
         grid,
@@ -136,11 +144,11 @@ at::Tensor generate_random_numbers(int64_t size, at::ScalarType dtype,
 }
 
 at::Tensor generate_uniform(int64_t size, at::ScalarType dtype) {
-  return generate_random_numbers(size, dtype, generate_uniform_kernel<float>, generate_uniform_kernel<double>, 4, 2);
+  return generate_random_numbers(size, dtype, generate_uniform_kernel<float>, generate_uniform_kernel<double>);
 }
 
 at::Tensor generate_normal(int64_t size, at::ScalarType dtype) {
-  return generate_random_numbers(size, dtype, generate_normal_kernel<float>, generate_normal_kernel<double>, 2, 1);
+  return generate_random_numbers(size, dtype, generate_normal_kernel<float>, generate_normal_kernel<double>);
 }
 
 } // namespace

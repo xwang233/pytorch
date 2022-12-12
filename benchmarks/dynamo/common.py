@@ -2096,6 +2096,12 @@ def _model_run_helper(name_, args, num_forks):
     current_name = name_
     placeholder_batch_size = 0
 
+    def write_csv():
+        for device in args.devices:
+            output_csv(
+                output_filename, [], [device, name_, placeholder_batch_size, 0.0]
+            )
+
     import sys
     env = os.environ.copy()
     stdout_stream = sys.stdout
@@ -2110,13 +2116,17 @@ def _model_run_helper(name_, args, num_forks):
         stderr_stream = subprocess.STDOUT
         print(f'started model {name_} on {gpu_index = }')
     try:
-        subprocess.check_call([sys.executable] + sys.argv + [f"--only={name_}"], env=env, stdout=stdout_stream, stderr=stderr_stream)
+        subprocess.check_call(
+            [sys.executable] + sys.argv + [f"--only={name_}"],
+            env=env, stdout=stdout_stream, stderr=stderr_stream,
+            timeout=60 * 20
+        )
+    except subprocess.TimeoutExpired:
+        print("TIMEOUT", f"on model {name_}" if run_in_parallel else "", file=sys.stderr)
+        write_csv()
     except subprocess.SubprocessError:
-        print("ERROR", f"on model {name_}" if run_in_parallel else "")
-        for device in args.devices:
-            output_csv(
-                output_filename, [], [device, name_, placeholder_batch_size, 0.0]
-            )
+        print("ERROR", f"on model {name_}" if run_in_parallel else "", file=sys.stderr)
+        write_csv()
     finally:
         if run_in_parallel:
             stdout_stream.close()

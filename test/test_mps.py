@@ -4033,26 +4033,6 @@ class TestNLLLoss(TestCase):
         helper((1, 5))
         helper((5, 9, 7, 4))
 
-    def test_upsample_nearest_exact2d(self):
-        def helper(N, C, H, W):
-            inputCPU = torch.arange(N * C * H * W, device='cpu', dtype=torch.float,
-                                    requires_grad=True).reshape(N, C, H, W)
-            inputCPU.retain_grad()
-            inputMPS = inputCPU.detach().clone().to('mps').requires_grad_()
-
-            outputCPU = torch.nn.functional.interpolate(inputCPU, size=(5, 5), mode='nearest-exact')
-            outputMPS = torch.nn.functional.interpolate(inputMPS, size=(5, 5), mode='nearest-exact')
-
-            self.assertEqual(outputCPU, outputMPS)
-
-            outputCPU.backward(gradient=torch.full_like(outputCPU, 0.3))
-            outputMPS.backward(gradient=torch.full_like(outputMPS, 0.3))
-
-            self.assertEqual(inputCPU.grad, inputMPS.grad)
-
-        helper(1, 1, 4, 4)
-        helper(7, 5, 3, 2)
-
     def test_upsample_nearest2d(self):
         def helper(N, C, H, W):
             inputCPU = torch.arange(N * C * H * W, device='cpu', dtype=torch.float,
@@ -4118,19 +4098,49 @@ class TestNLLLoss(TestCase):
         helper(1, 1, 4, 4)
         helper(7, 5, 3, 2)
 
-    def test_upsample_nearest1d(self):
-        def helper(N, C, H, W):
-            inputCPU = torch.arange(C * H * W, device='cpu', dtype=torch.float,
-                                    requires_grad=True).reshape(C, H, W)
-            inputMPS = inputCPU.detach().clone().to('mps')
+    def test_interpolate(self):
+        def helper(shape, output_size, scales, mode, align_corners=False):
+            inputCPU = torch.randn(shape, device='cpu', dtype=torch.float, requires_grad=True)
+            inputCPU.retain_grad()
+            inputMPS = inputCPU.detach().clone().to('mps').requires_grad_()
 
-            outputCPU = torch.nn.functional.interpolate(inputCPU, scale_factor=2.0, mode='nearest')
-            outputMPS = torch.nn.functional.interpolate(inputMPS, scale_factor=2.0, mode='nearest')
+            # align_corners is used for 2D interpolation only
+            if (align_corners is True and len(shape) > 3 and mode == 'bilinear'):
+                if scales is not None:
+                    outputCPU = nn.functional.interpolate(inputCPU, scale_factor=scales, mode=mode, align_corners=align_corners)
+                    outputMPS = nn.functional.interpolate(inputMPS, scale_factor=scales, mode=mode, align_corners=align_corners)
+                else:
+                    outputCPU = nn.functional.interpolate(inputCPU, size=output_size, mode=mode, align_corners=align_corners)
+                    outputMPS = nn.functional.interpolate(inputMPS, size=output_size, mode=mode, align_corners=align_corners)
+            elif scales is not None:
+                outputCPU = nn.functional.interpolate(inputCPU, scale_factor=scales, mode=mode)
+                outputMPS = nn.functional.interpolate(inputMPS, scale_factor=scales, mode=mode)
+            else:
+                outputCPU = nn.functional.interpolate(inputCPU, size=output_size, mode=mode)
+                outputMPS = nn.functional.interpolate(inputMPS, size=output_size, mode=mode)
 
             self.assertEqual(outputCPU, outputMPS)
 
-        helper(1, 1, 4, 4)
-        helper(7, 5, 3, 2)
+            # backward pass (chose 0.6 just to have the grad_output != 1)
+            outputCPU.backward(gradient=torch.full_like(outputCPU, 0.6))
+            outputMPS.backward(gradient=torch.full_like(outputMPS, 0.6))
+            self.assertEqual(inputCPU.grad, inputMPS.grad)
+
+        # 1D interpolation
+        for mode in ['nearest', 'nearest-exact']:
+            helper([2, 3, 4], [3], None, mode)  # downsample with size
+            helper([2, 3, 4], [6], None, mode)  # upsample with size
+            helper([2, 3, 4], None, [0.6], mode)  # downsample with scale factor
+            helper([2, 3, 4], None, [1.7], mode)  # upsample with scale factor
+        # 2D interpolation
+        for mode in ['nearest', 'nearest-exact', 'bilinear']:
+            helper([2, 3, 4, 5], [3, 4], None, mode)  # downsample_nearest with size
+            helper([2, 3, 4, 5], [6, 7], None, mode)  # upsample_nearest with size
+            helper([2, 3, 4, 5], None, [0.6, 0.7], mode)  # downsample_nearest with scale factor
+            helper([2, 3, 4, 5], None, [1.4, 1.7], mode)  # upsample_nearest with scale factor
+        # align_corners=True
+        helper([2, 3, 4, 5], [3, 4], None, 'bilinear', True)
+        helper([2, 3, 4, 5], None, [1.4, 1.7], 'bilinear', True)
 
     # Test concat forward
     def test_cat1(self):
@@ -5440,6 +5450,13 @@ class TestNLLLoss(TestCase):
         helper((2, 8, 4, 5), 0.1)
         helper((2, 8, 3, 5), 0.1)
         helper((2, 8, 3, 5), 0.2)
+
+    def test_nan_to_num(self):
+        inputCPU = torch.tensor([float('nan'), float('inf'), -float('inf'), 3.14])
+        inputMPS = inputCPU.detach().clone().to('mps').requires_grad_()
+        outputCPU = torch.nan_to_num(inputCPU, nan=2.0, posinf=1.0, neginf=-1.0)
+        outputMPS = torch.nan_to_num(inputMPS, nan=2.0, posinf=1.0, neginf=-1.0)
+        self.assertEqual(outputMPS, outputCPU)
 
     # Test where
     def test_where(self):
@@ -8185,6 +8202,7 @@ class TestConsistency(TestCase):
         'matmul': ['f32'],
         'mm': ['f32'],
         'mv': ['f32'],
+        'nan_to_num': ['b8', 'f16', 'f32', 'i16', 'i32', 'i64', 'u8'],
         'neg': ['b8', 'f16', 'f32', 'i16', 'i32', 'i64'],
         'nn.functional.adaptive_max_pool1d': ['f32'],
         'nn.functional.adaptive_max_pool2d': ['f32'],
@@ -8234,6 +8252,7 @@ class TestConsistency(TestCase):
         'nn.functional.triplet_margin_loss': ['f32', 'i16', 'i32', 'i64'],
         'nn.functional.triplet_margin_with_distance_loss': ['f32', 'i16', 'i32', 'i64'],
         'nn.functional.upsample_bilinear': ['f32'],
+        'nn.functional.upsample_nearest': ['f32'],
         'norm': ['f32', 'f16'],
         'positive': ['f16', 'f32', 'i16', 'i32', 'i64', 'u8'],
         'pow': ['f16'],

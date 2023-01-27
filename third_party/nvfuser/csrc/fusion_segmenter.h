@@ -270,6 +270,10 @@ class TORCH_CUDA_CU_API SegmentedFusion {
     return groups_;
   }
 
+  const std::vector<SegmentedGroup*>& groups() const {
+    return groups_;
+  }
+
   std::vector<SegmentedEdge*>& edges() {
     return edges_;
   }
@@ -329,6 +333,44 @@ class TORCH_CUDA_CU_API SegmentedFusion {
   SegmentedEdge* newEdge(SegmentedGroup* from, SegmentedGroup* to, Val* val);
 
   HeuristicSummary* getCachedHeuristicDataFor(SegmentedGroup* group);
+
+  //! Lower FP precision of inputs and outputs specified by the given
+  //! edges.
+  //!
+  //! This function is used in two scenarios. One is when testing a
+  //! merge of groups during the segmentation time. At that time,
+  //! those groups are not yet merged, but we want to consider them as
+  //! merged and see if there's a valid scheduler. So, we treat the
+  //! groups given by groups_to_merge as a single group and insert
+  //! cast ops into the group. No other group is modified unless it
+  //! has an edge to any of the merged groups.
+  //!
+  //! The second scenario is when inserting cast ops to a whole
+  //! segmented fusion. All groups are considered separate groups with
+  //! no (temporary) merging. Each edge is considered a potential
+  //! place to insert cast. In this case, groups_to_merge should be
+  //! empty.
+  std::vector<SegmentedEdge*> castInputOutputToLowerPrecision(
+      const std::vector<SegmentedEdge*>& edges,
+      const std::vector<SegmentedGroup*>& groups_to_merge = {});
+
+  //! Revert the changes made by castInputOutputToLowerPrecision to the given
+  //! edges
+  void revertInputOutputPrecisionChanges(
+      const std::vector<SegmentedEdge*>& edges);
+
+  //! Grab edges with val
+  std::vector<SegmentedEdge*> getEdgesByVal(Val* val) const;
+
+  //! Make sure it's a DAG and optionally disjoint
+  void validate(bool require_disjoint = true) const;
+
+  //! Same as validate but only enabled when NDEBUG is undefined
+  void validateIfDebug(bool require_disjoint = true) const;
+
+ private:
+  void validateDAG() const;
+  void validateDisjoint() const;
 
  private:
   //! Unique name for segmented fusion
@@ -472,7 +514,7 @@ class TORCH_CUDA_CU_API SegmentCandidateFinder {
     return std::move(scf.segmented_fusion_);
   }
 
-  static bool TranslateWelfordInFusion(
+  static bool translateWelfordInFusion(
       Fusion* fusion,
       const KernelArgumentHolder& runtime_inputs);
 
@@ -490,6 +532,8 @@ class TORCH_CUDA_CU_API SegmentCandidateFinder {
   SegmentedGroup* mergeNodes();
 
   bool codeGenSupportedMerge(SegmentedGroup* group1, SegmentedGroup* group2);
+
+  void buildInitialSegments();
 
   void findSegments();
 
@@ -614,6 +658,12 @@ class TORCH_CUDA_CU_API SegmentCandidateFinder {
   //!  implement the expression evaluator transfer and
   //!  remove runtime_inputs_ in a follow up.
   const KernelArgumentHolder& runtime_inputs_;
+
+  // List of vals to treat as complete fusion inputs for segmentation
+  std::vector<Val*> forwarded_fusion_inputs_;
+
+  //! Keep track of complete fusion input use
+  std::unordered_map<Val*, SegmentedGroup*> input2group_;
 };
 
 // TODO: Make as member functions on classes instead of global scope

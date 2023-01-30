@@ -1669,7 +1669,7 @@ Tensor _reshape_alias(const Tensor& self, IntArrayRef sizes, IntArrayRef strides
 }
 
 Tensor reshape_as(const Tensor& self, const Tensor& other) {
-  return self.reshape(other.sizes());
+  return self.reshape_symint(other.sym_sizes());
 }
 
 static Tensor select_sparse(const Tensor& self, int64_t dim, int64_t index) {
@@ -3458,7 +3458,7 @@ Tensor unflatten(const Tensor& self, Dimname dim, IntArrayRef sizes, DimnameList
 }
 
 Tensor view_as(const Tensor& self, const Tensor& other) {
-  return self.view(other.sizes());
+  return self.view_symint(other.sym_sizes());
 }
 
 int64_t numel(const Tensor& self) {

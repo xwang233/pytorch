@@ -1708,6 +1708,13 @@ def parse_args(args=None):
         help="Run different models on different CUDA devices in parallel to speedup benchmark process."
     )
 
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=1200,
+        help="timeout (ms) for benchmarking.",
+    )
+
     group_fuser = parser.add_mutually_exclusive_group()
     # --nvfuser is now the default, keep the option to not break scripts
     group_fuser.add_argument("--nvfuser", action="store_true", help=argparse.SUPPRESS)
@@ -2257,7 +2264,7 @@ def _model_run_helper(name_, args, num_forks):
         stderr_stream = subprocess.STDOUT
         print(f'started model {name_} on {gpu_index = }')
     try:
-        timeout = 60 * 20
+        timeout = args.timeout
         if should_diff_branch(args):
             timeout *= 2
         subprocess.check_call(

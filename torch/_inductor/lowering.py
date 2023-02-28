@@ -80,6 +80,7 @@ add_needs_realized_inputs(
         aten.upsample_bilinear2d,
         aten.upsample_nearest2d,
         aten.upsample_bicubic2d,
+        aten._int_mm,
     ]
 )
 
@@ -3897,9 +3898,15 @@ try:
         return TensorBox.create(ir.Wait.create(input))
 
     @register_lowering(aten.all_reduce)
-    def allreduce(input, reduce_op, tag, ranks, stride):
+    def allreduce(input, reduce_op, tag, ranks, group_size):
         return TensorBox.create(
-            ir.AllReduce.create(input, reduce_op, tag, ranks, stride)
+            ir.AllReduce.create(input, reduce_op, tag, ranks, group_size)
+        )
+
+    @register_lowering(aten.all_gather_into_tensor)
+    def all_gather_into_tensor(shard, tag, ranks, group_size):
+        return TensorBox.create(
+            ir.AllGatherIntoTensor.create(shard, tag, ranks, group_size)
         )
 
 except ImportError:

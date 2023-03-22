@@ -1238,6 +1238,7 @@ class AOTConfig:
     keep_inference_input_mutations: bool
     dynamic_shapes: bool = False
     aot_autograd_arg_pos_to_source : Optional[List[Source]] = None
+    inference_compiler: Optional[Callable] = None
 
 def aot_dispatch_base(flat_fn, flat_args: List[Tensor], aot_config: AOTConfig, *, fw_metadata: ViewAndMutationMeta):
     # aot_dispatch_base requires functionalization, but doesn't need to handle as many cases as the autograd case.
@@ -1257,16 +1258,12 @@ def aot_dispatch_base(flat_fn, flat_args: List[Tensor], aot_config: AOTConfig, *
     with enable_python_dispatcher():
         fw_module = make_fx(trace_fn, decomposition_table=aot_config.decompositions)(*flat_args)
 
-    # As long as we opted to remove input mutations, then
-    # there should be *NO* mutating ops in the graph at this point.
-    copy_count = assert_functional_graph(fw_module.graph, allow_input_mutations=aot_config.keep_inference_input_mutations)
-
-    fw_module.graph.eliminate_dead_code()
-    fw_module.recompile()
-
-    copy_count2 = assert_functional_graph(fw_module.graph, allow_input_mutations=aot_config.keep_inference_input_mutations)
-
-    assert copy_count == copy_count2
+    if not aot_config.keep_inference_input_mutations:
+        # As long as we opted to remove input mutations, then
+        # there should be *NO* mutating ops in the graph at this point.
+        assert_functional_graph(fw_module.graph)
+        fw_module.graph.eliminate_dead_code()
+        fw_module.recompile()
 
     aot_graphs_log.info(format_graph_code(f"====== Forward graph {aot_config.aot_id} ======\n", fw_module))
 
@@ -1274,7 +1271,8 @@ def aot_dispatch_base(flat_fn, flat_args: List[Tensor], aot_config: AOTConfig, *
     context = disable_autocast_manager if disable_amp else nullcontext
 
     with context(), track_graph_compiling(aot_config, "inference"):
-        compiled_fw = aot_config.fw_compiler(fw_module, flat_args)
+        compiler = aot_config.inference_compiler if aot_config.inference_compiler is not None else aot_config.fw_compiler
+        compiled_fw = compiler(fw_module, flat_args)
 
     compiled_fn = create_runtime_wrapper(
         compiled_fw,
@@ -1286,27 +1284,11 @@ def aot_dispatch_base(flat_fn, flat_args: List[Tensor], aot_config: AOTConfig, *
     return compiled_fn
 
 
-# Returns the number of detected copy_
-def assert_functional_graph(fx_g: torch.fx.Graph, *, allow_input_mutations: bool = False) -> int:
-    placeholders = set()
-    copy_count = 0
-    # NB: It would also be nice to verify that the mutations all happen at the
-    # end, but we also do some administrative views after mutations so this
-    # isn't actually true.  (TODO: Could this cause problems for Inductor?)
+def assert_functional_graph(fx_g: torch.fx.Graph):
     for n in fx_g.nodes:
-        if n.op == "placeholder":
-            placeholders.add(n)
         if isinstance(n.target, torch._ops.OpOverload):
-            if n.target is aten.copy_.default and allow_input_mutations:
-                suffix = True
-                # Can only copy_ into an input, and can only do so once
-                assert n.args[0] in placeholders
-                placeholders.remove(n.args[0])
-                copy_count += 1
-            else:
-                assert not n.target._schema.is_mutable, \
-                    f'aot_autograd expected to have an entirely functional graph, but found {n.format_node()}'
-    return copy_count
+            assert not n.target._schema.is_mutable, \
+                f'aot_autograd expected to have an entirely functional graph, but found {n.format_node()}'
 
 
 @contextmanager
@@ -2509,7 +2491,8 @@ def aot_dispatch_autograd(flat_fn, flat_args: List[Any], aot_config: AOTConfig, 
                                 aot_config.bw_compiler, None, None,
                                 aot_config.decompositions, 0, aot_config.aot_id,
                                 aot_config.keep_inference_input_mutations,
-                                aot_config.dynamic_shapes
+                                aot_config.dynamic_shapes,
+                                inference_compiler=None,
                             )
                         )
                     else:
@@ -2747,6 +2730,7 @@ def aot_function(
     hasher_type=None,  # deprecated
     static_argnums: Optional[Tuple[int]] = None,  # deprecated
     keep_inference_input_mutations: bool = False,
+    inference_compiler: Optional[Callable] = None,
     *,
     # Whether or not to trace with dynamic shapes
     dynamic=False,
@@ -2784,7 +2768,10 @@ def aot_function(
             backward graphs.
         decompositions (Dict): A dictionary to define the decomposition of
             larger Aten ops into simpler or core Aten ops.
-
+        inference_compiler (Optional[Callable]): A Python function that accepts an
+            Fx graph with Aten ops and input args, and returns a Callable that
+            semantically is equivalent to the input Fx graph.  Default: None
+            (when None, it defaults to the :attr:`fw_compiler`)
     Returns:
         Returns a ``Callable`` that retains the eager behavior of the original
         :attr:`fn`, but with forward and backward graph compiled via
@@ -2808,9 +2795,12 @@ def aot_function(
 
     if bw_compiler is None:
         bw_compiler = fw_compiler
+    if inference_compiler is None:
+        inference_compiler = fw_compiler
     aot_config = AOTConfig(
         fw_compiler=fw_compiler,
         bw_compiler=bw_compiler,
+        inference_compiler=fw_compiler,
         partition_fn=partition_fn,
         decompositions=decompositions,
         num_params_buffers=num_params_buffers,
@@ -2934,6 +2924,7 @@ def aot_module_simplified(
     hasher_type=None,
     static_argnums=None,
     keep_inference_input_mutations=False,
+    inference_compiler: Optional[Callable] = None,
 ) -> nn.Module:
     """
     This is the simplified or low overhead version of aot_module. For frontends
@@ -2999,6 +2990,8 @@ def aot_module_simplified(
     assert static_argnums is None
     if bw_compiler is None:
         bw_compiler = fw_compiler
+    if inference_compiler is None:
+        inference_compiler = fw_compiler
 
     full_args = []
     # First, the params
@@ -3040,6 +3033,7 @@ def aot_module_simplified(
     aot_config = AOTConfig(
         fw_compiler=fw_compiler,
         bw_compiler=bw_compiler,
+        inference_compiler=inference_compiler,
         partition_fn=partition_fn,
         decompositions=decompositions,
         num_params_buffers=params_len,

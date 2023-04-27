@@ -2790,22 +2790,32 @@ reference_inputs_bucketize = partial(sample_inputs_bucketize, reference_inputs_m
 def sample_inputs_searchsorted(op_info, device, dtype, requires_grad, **kwargs):
     make_arg = partial(make_tensor, dtype=dtype, device=device, requires_grad=requires_grad)
 
-    sizes = ((0,), (M,), (0, 0), (M, M), (0, 0, 0), (M, M, M))
-    for size, noncontiguous, out_int32, right in product(sizes, [False, True], [False, True], [False, True]):
+    # (unsorted tensor size, (input sizes,))
+    sizes = (
+        ((0,), ((0,),)),
+        ((M,), ((), (M,), (M, M))),
+        ((0, 0), ((0, 0),)),
+        ((M, M), ((M, M),)),
+        ((0, 0, 0), ((0, 0, 0),)),
+        ((M, M, M), ((M, M, M),)),
+    )
+
+    for (size, input_sizes), noncontiguous, out_int32, right in product(sizes, [False, True], [False, True], [False, True]):
         unsorted_tensor = make_arg(size, noncontiguous=noncontiguous)
-        input_tensor = make_arg(size, noncontiguous=noncontiguous)
-        if np.product(size) == 0:
-            boundary_tensor = unsorted_tensor
-            sorter = make_tensor(size, dtype=torch.int64, device=device, noncontiguous=noncontiguous)
-        else:
-            boundary_tensor, sorter = torch.sort(unsorted_tensor)
-        side = "right" if right else "left"
+        for input_size in input_sizes:
+            input_tensor = make_arg(input_size, noncontiguous=noncontiguous)
+            if np.product(size) == 0:
+                boundary_tensor = unsorted_tensor
+                sorter = make_tensor(size, dtype=torch.int64, device=device, noncontiguous=noncontiguous)
+            else:
+                boundary_tensor, sorter = torch.sort(unsorted_tensor)
+            side = "right" if right else "left"
 
-        yield SampleInput(boundary_tensor, input_tensor, out_int32=out_int32, right=right)
-        yield SampleInput(boundary_tensor, input_tensor, out_int32=out_int32, side=side)
+            yield SampleInput(boundary_tensor, input_tensor, out_int32=out_int32, right=right)
+            yield SampleInput(boundary_tensor, input_tensor, out_int32=out_int32, side=side)
 
-        yield SampleInput(unsorted_tensor, input_tensor, out_int32=out_int32, right=right, sorter=sorter)
-        yield SampleInput(unsorted_tensor, input_tensor, out_int32=out_int32, side=side, sorter=sorter)
+            yield SampleInput(unsorted_tensor, input_tensor, out_int32=out_int32, right=right, sorter=sorter)
+            yield SampleInput(unsorted_tensor, input_tensor, out_int32=out_int32, side=side, sorter=sorter)
 
 def sample_inputs_gradient(op_info, device, dtype, requires_grad, **kwargs):
     make_arg = partial(make_tensor, device=device, dtype=dtype, requires_grad=requires_grad, low=None, high=None)
@@ -16108,6 +16118,8 @@ op_db: List[OpInfo] = [
            gradcheck_fast_mode=True,
            supports_forward_ad=True,
            supports_fwgrad_bwgrad=True,
+           # See https://github.com/pytorch/pytorch/issues/66357
+           check_batched_forward_grad=False,
            assert_autodiffed=True,
            skips=(
                # https://github.com/pytorch/pytorch/issues/89353
@@ -16117,7 +16129,11 @@ op_db: List[OpInfo] = [
                #               'tensors' but instead found type 'Tensor (inferred)'.
                DecorateInfo(unittest.expectedFailure, 'TestJit', 'test_jit_alias_remapping'),
                # see https://github.com/pytorch/pytorch/issues/71286
-               DecorateInfo(unittest.expectedFailure, 'TestNNCOpInfo', 'test_nnc_correctness'),)),
+               DecorateInfo(unittest.expectedFailure, 'TestNNCOpInfo', 'test_nnc_correctness'),
+               # see https://github.com/pytorch/pytorch/issues/99806
+               # RuntimeError: The size of tensor a (25) must match the size of tensor b (0) at non-singleton dimension 0.
+               DecorateInfo(unittest.expectedFailure, 'TestBwdGradients', 'test_fn_gradgrad'),
+           )),
     OpInfo('unbind',
            dtypes=all_types_and_complex_and(torch.complex32, torch.bool, torch.float16, torch.bfloat16),
            ref=reference_unbind,

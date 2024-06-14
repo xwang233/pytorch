@@ -4287,17 +4287,17 @@ def _model_run_helper(name_, args, num_forks):
         if should_diff_branch(args):
             timeout *= 2
         env = os.environ.copy()
-        if args.ci and name in CI_PRESERVE_COMPILE_DEBUG:
+        if args.ci and name_ in CI_PRESERVE_COMPILE_DEBUG:
             env["TORCH_COMPILE_DEBUG"] = "1"
         subprocess.check_call(
-            [sys.executable] + sys.argv + [f"--only={name}"],
+            [sys.executable] + sys.argv + [f"--only={name_}"],
             timeout=timeout,
             env=env,
             stdout=stdout_stream,
             stderr=stderr_stream,
         )
     except subprocess.TimeoutExpired:
-        write_csv_when_exception(args, name, "timeout")
+        write_csv_when_exception(args, name_, "timeout")
     except subprocess.CalledProcessError as e:
         print("Run failed with return code: ", e.returncode, file=sys.stderr)
         print("Output: ", e.output, file=sys.stderr)

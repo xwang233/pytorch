@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 from .utils import typename
 
 __all__ = ["VariadicSignatureType", "isvariadic", "VariadicSignatureMeta", "Variadic"]
@@ -64,7 +65,7 @@ class VariadicSignatureMeta(type):
         if not isinstance(variadic_type, tuple):
             variadic_type = variadic_type,
         return VariadicSignatureType(
-            'Variadic[%s]' % typename(variadic_type),
+            f'Variadic[{typename(variadic_type)}]',
             (),
             dict(variadic_type=variadic_type, __slots__=())
         )

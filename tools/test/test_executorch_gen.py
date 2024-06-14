@@ -181,7 +181,7 @@ class TestParseNativeYaml(unittest.TestCase):
                 use_aten_lib=False,
                 out_file=out_file,
             )
-        with open(out_yaml_path, "r") as out_file:
+        with open(out_yaml_path) as out_file:
             es = yaml.load(out_file, Loader=LineLoader)
         self.assertTrue(all("func" in e for e in es))
         self.assertTrue(all(e.get("variants") == "function" for e in es))
@@ -268,7 +268,7 @@ class TestParseKernelYamlFiles(unittest.TestCase):
                 use_aten_lib=False,
                 out_file=out_file,
             )
-        with open(out_yaml_path, "r") as out_file:
+        with open(out_yaml_path) as out_file:
             es = yaml.load(out_file, Loader=LineLoader)
         self.assertTrue(all("func" in e for e in es))
         self.assertTrue(all(e.get("variants") == "function" for e in es))
@@ -332,6 +332,18 @@ class TestGenFunctionsDeclarations(unittest.TestCase):
             loc=Location(__file__, 1),
             valid_tags=set(),
         )
+        (
+            self.custom_3_native_function,
+            custom_3_backend_index,
+        ) = NativeFunction.from_yaml(
+            {
+                "func": "custom_3::op_3(Tensor(a!) self, Tensor x) -> Tensor(a!)",
+                "dispatch": {"CPU": "kernel_3"},
+                "variants": "method",
+            },
+            loc=Location(__file__, 1),
+            valid_tags=set(),
+        )
 
         backend_indices: Dict[DispatchKey, Dict[OperatorName, BackendMetadata]] = {
             DispatchKey.CPU: {},
@@ -366,7 +378,7 @@ class TestGenFunctionsDeclarations(unittest.TestCase):
 namespace custom_1 {
 
 // custom_1::op_1() -> bool
-TORCH_API inline bool op_1(torch::executor::RuntimeContext & context) {
+TORCH_API inline bool op_1(torch::executor::KernelRuntimeContext & context) {
     return ::at::native::kernel_1(context);
 }
 
@@ -380,7 +392,7 @@ TORCH_API inline bool op_1(torch::executor::RuntimeContext & context) {
 namespace custom_2 {
 
 // custom_2::op_2() -> bool
-TORCH_API inline bool op_2(torch::executor::RuntimeContext & context) {
+TORCH_API inline bool op_2(torch::executor::KernelRuntimeContext & context) {
     return ::at::native::kernel_2(context);
 }
 
@@ -403,11 +415,34 @@ TORCH_API inline bool op_2(torch::executor::RuntimeContext & context) {
 namespace custom_1 {
 
 // custom_1::op_1() -> bool
-TORCH_API inline bool op_1(torch::executor::RuntimeContext & context) {
+TORCH_API inline bool op_1(torch::executor::KernelRuntimeContext & context) {
     return at::op_1();
 }
 
 } // namespace custom_1
+        """
+            in declarations
+        )
+
+    def test_aten_lib_method_variant(self) -> None:
+        declarations = gen_functions_declarations(
+            native_functions=[
+                self.custom_3_native_function,
+            ],
+            kernel_index=self.kernel_index,
+            selector=SelectiveBuilder.get_nop_selector(),
+            use_aten_lib=True,
+        )
+        self.assertTrue(
+            """
+namespace custom_3 {
+
+// custom_3::op_3(Tensor(a!) self, Tensor x) -> Tensor(a!)
+TORCH_API inline at::Tensor & op_3(torch::executor::KernelRuntimeContext & context, at::Tensor & self, const at::Tensor & x) {
+    return self.op_3(x);
+}
+
+} // namespace custom_3
         """
             in declarations
         )
@@ -463,12 +498,14 @@ class TestComputeCodegenUnboxedKernels(unittest.TestCase):
 Kernel(
     "custom_1::op_1",
     "v1/7;0,1,2,3|7;0,1,2,3|7;0,1,2,3",
-    [](torch::executor::RuntimeContext & context, EValue** stack) {
+    [](torch::executor::KernelRuntimeContext & context, EValue** stack) {
         """
             + """
 
+        internal::EventTracerProfileScope event_tracer_scope(context.internal_event_tracer(), "native_call_op_1");
         EXECUTORCH_SCOPE_PROF("native_call_op_1");
         bool result_ = at::native::default_kernel(context, );
+        internal::event_tracer_log_evalue(context.internal_event_tracer(), *stack[0]);
 
         *stack[0] = EValue(result_);
     }
@@ -548,12 +585,14 @@ Kernel(
             """
 Kernel(
     "custom_1::op_1",
-    [](torch::executor::RuntimeContext & context, EValue** stack) {
+    [](torch::executor::KernelRuntimeContext & context, EValue** stack) {
         """
             + """
 
+        internal::EventTracerProfileScope event_tracer_scope(context.internal_event_tracer(), "native_call_op_1");
         EXECUTORCH_SCOPE_PROF("native_call_op_1");
         bool result_ = at::native::default_kernel(context, );
+        internal::event_tracer_log_evalue(context.internal_event_tracer(), *stack[0]);
 
         *stack[0] = EValue(result_);
     }
@@ -582,12 +621,14 @@ Kernel(
             """
 Kernel(
     "custom_1::op_1",
-    [](torch::executor::RuntimeContext & context, EValue** stack) {
+    [](torch::executor::KernelRuntimeContext & context, EValue** stack) {
         """
             + """
 
+        internal::EventTracerProfileScope event_tracer_scope(context.internal_event_tracer(), "native_call_op_1");
         EXECUTORCH_SCOPE_PROF("native_call_op_1");
         bool result_ = at::native::default_kernel(context, );
+        internal::event_tracer_log_evalue(context.internal_event_tracer(), *stack[0]);
 
         *stack[0] = EValue(result_);
     }

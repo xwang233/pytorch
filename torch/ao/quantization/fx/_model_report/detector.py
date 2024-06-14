@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 from typing import Any, Dict, Set, Tuple, Callable, List
 
 import torch
@@ -32,7 +33,7 @@ DETECTOR_IS_POST_OBS_KEY = "is_post_observer"
 DETECTOR_OBS_ARGS_KEY = "observer_args"
 
 # Mapping related code
-class DetectorQConfigInfo():
+class DetectorQConfigInfo:
     r"""
     This class contains the QConfig information for a single module.
     The list of variables / values this contains can grow depending on the
@@ -117,7 +118,7 @@ class DetectorBase(ABC):
     Concrete detectors should follow the same general API, which includes:
     - A method to calculate and return observer insertion points
         - Should return both the fqns and the Observer class to insert
-    - A method to return a report based on the the detector
+    - A method to return a report based on the detector
         - Should return a str-based report and dict info in Tuple[str,Dict] format
     """
 
@@ -234,7 +235,7 @@ class PerChannelDetector(DetectorBase):
         if self.backend_chosen in self.DEFAULT_BACKEND_PER_CHANNEL_SUPPORTED_MODULES:
             self.supported_modules = self.DEFAULT_BACKEND_PER_CHANNEL_SUPPORTED_MODULES[self.backend_chosen]
         else:
-            raise ValueError("Not configured to work with {}. Try a different default backend".format(self.backend_chosen))
+            raise ValueError(f"Not configured to work with {self.backend_chosen}. Try a different default backend")
 
     def get_detector_name(self) -> str:
         r""" returns the string name of this detector"""
@@ -292,7 +293,7 @@ class PerChannelDetector(DetectorBase):
         # get the fully qualified name and check if in list of modules to include and list of modules to ignore
         for fqn, module in model.named_modules():
 
-            is_in_include_list = sum([isinstance(module, x) for x in self.supported_modules]) > 0
+            is_in_include_list = any(isinstance(module, x) for x in self.supported_modules)
 
             # check if the module per_channel is supported
             # based on backend
@@ -352,16 +353,14 @@ class PerChannelDetector(DetectorBase):
         per_channel_info = self._detect_per_channel_helper(model)
 
         # String to let the user know of further optimizations
-        further_optims_str = "Further Optimizations for backend {}: \n".format(self.backend_chosen)
+        further_optims_str = f"Further Optimizations for backend {self.backend_chosen}: \n"
 
         optimizations_possible = False
         for fqn in per_channel_info:
             fqn_dict = per_channel_info[fqn]
             if fqn_dict[self.PER_CHAN_SUPPORTED_KEY] and not fqn_dict[self.PER_CHAN_USED_KEY]:
                 optimizations_possible = True
-                further_optims_str += "Module {module_fqn} can be configured to use per_channel quantization.\n".format(
-                    module_fqn=fqn
-                )
+                further_optims_str += f"Module {fqn} can be configured to use per_channel quantization.\n"
 
         if optimizations_possible:
             further_optims_str += (
@@ -517,10 +516,10 @@ class DynamicStaticDetector(DetectorBase):
         Returns True if the module is supported by observer, False otherwise
         """
         # check to see if module is of a supported type
-        is_supported_type = sum([isinstance(module, x) for x in self.DEFAULT_DYNAMIC_STATIC_CHECK_SUPPORTED]) > 0
+        is_supported_type = any(isinstance(module, x) for x in self.DEFAULT_DYNAMIC_STATIC_CHECK_SUPPORTED)
 
         # check if it will be supported
-        future_supported_type = sum([isinstance(module, x) for x in self.DEFAULT_DYNAMIC_STATIC_FUTURE_SUPPORTED]) > 0
+        future_supported_type = any(isinstance(module, x) for x in self.DEFAULT_DYNAMIC_STATIC_FUTURE_SUPPORTED)
 
         # supported
         supported = is_supported_type or future_supported_type
@@ -578,7 +577,7 @@ class DynamicStaticDetector(DetectorBase):
                 post_obs_dist_classif = self.STATIONARY_STR if post_stat > self.tolerance else self.NON_STATIONARY_STR
 
                 # check if current support or future support
-                is_supported_type = sum([isinstance(module, x) for x in self.DEFAULT_DYNAMIC_STATIC_CHECK_SUPPORTED]) > 0
+                is_supported_type = any(isinstance(module, x) for x in self.DEFAULT_DYNAMIC_STATIC_CHECK_SUPPORTED)
 
                 # store the set of important information for this module
                 module_info = {
@@ -791,7 +790,7 @@ class InputWeightEqualizationDetector(DetectorBase):
         Returns True if the module is supported by observer, False otherwise
         """
         # check to see if module is of a supported type
-        is_supported_type = sum([type(module) is x for x in self.SUPPORTED_MODULES]) > 0
+        is_supported_type = any(type(module) is x for x in self.SUPPORTED_MODULES)
 
         # this is check for observer insertion
         if insert:
@@ -990,9 +989,8 @@ class InputWeightEqualizationDetector(DetectorBase):
         if global_range == 0:
             range_zero_explanation = "We recommend removing this channel as it doesn't provide any useful information."
             raise ValueError(
-                "The range of the {} data for module {} is 0, which means you have a constant value channel. {}".format(
-                    info_str, module_fqn, range_zero_explanation
-                )
+                f"The range of the {info_str} data for module {module_fqn} is 0, "
+                f"which means you have a constant value channel. {range_zero_explanation}"
             )
 
         ratio = per_channel_range / global_range
@@ -1019,7 +1017,7 @@ class InputWeightEqualizationDetector(DetectorBase):
 
             # raise error if not in weight info
             if module_fqn not in weight_info:
-                raise KeyError("Unable to find weight range stats for module {}".format(module_fqn))
+                raise KeyError(f"Unable to find weight range stats for module {module_fqn}")
 
             # calculate the ratios of the weight info and input info
             weight_ratio = self._calculate_range_ratio(weight_info[module_fqn], self.WEIGHT_STR, module_fqn)

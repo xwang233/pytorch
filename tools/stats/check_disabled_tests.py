@@ -7,7 +7,6 @@ from tempfile import TemporaryDirectory
 from typing import Any, Dict, Generator, Tuple
 
 from tools.stats.upload_stats_lib import (
-    download_gha_artifacts,
     download_s3_artifacts,
     is_rerun_disabled_tests,
     unzip,
@@ -50,7 +49,14 @@ def process_report(
         #
         # We care only about the latter two here
         skipped = parsed_test_case.get("skipped", None)
-        if skipped and "num_red" not in skipped.get("message", ""):
+
+        # NB: Regular ONNX tests could return a list of subskips here where each item in the
+        # list is a skipped message.  In the context of rerunning disabled tests, we could
+        # ignore this case as returning a list of subskips only happens when tests are run
+        # normally
+        if skipped and (
+            type(skipped) is list or "num_red" not in skipped.get("message", "")
+        ):
             continue
 
         name = parsed_test_case.get("name", "")
@@ -103,12 +109,6 @@ def get_test_reports(
 
         artifact_paths = download_s3_artifacts(
             "test-reports", workflow_run_id, workflow_run_attempt
-        )
-        for path in artifact_paths:
-            unzip(path)
-
-        artifact_paths = download_gha_artifacts(
-            "test-report", workflow_run_id, workflow_run_attempt
         )
         for path in artifact_paths:
             unzip(path)

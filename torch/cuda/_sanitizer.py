@@ -1,9 +1,10 @@
+# mypy: allow-untyped-defs
 r"""
-This module introduces CUDA Sanitizer, a tool for detecting synchronization errors
-between kernels ran on different streams. It stores information on accesses to tensors
-to determine if they are synchronized or not. When enabled in a python program and a
-possible data race is detected, a detailed warning will be printed and the program
-will exit.
+This module introduces CUDA Sanitizer, a tool for detecting synchronization errors between kernels ran on different streams.
+
+It stores information on accesses to tensors to determine if they are synchronized
+or not. When enabled in a python program and a possible data race is detected, a
+detailed warning will be printed and the program will exit.
 
 It can be enabled either by importing this module and calling
 :func:`enable_cuda_sanitizer()` or by exporting the ``TORCH_CUDA_SANITIZER``
@@ -12,6 +13,7 @@ environment variable.
 
 import enum
 import functools
+import inspect
 import io
 import logging
 import sys
@@ -21,9 +23,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, TypeVar
 
 import torch
-import torch.utils._cuda_trace as cuda_trace
+import torch.cuda._gpu_trace as gpu_trace
+from torch.utils import _pytree as pytree
 from torch.utils._python_dispatch import TorchDispatchMode
-from torch.utils._pytree import tree_map
 
 
 DEFAULT_STREAM_ID = 0
@@ -62,6 +64,7 @@ class Access:
         is_output: Whether the tensor was an output of the kernel.
         stack_trace: the stack summary object captured during access.
     """
+
     type: AccessType
     seq_num: SeqNum
     stream: StreamId
@@ -153,6 +156,7 @@ class TensorInfo:
             the last write.
         write: the last write access to the tensor.
     """
+
     allocation_stack_trace: Optional[traceback.StackSummary]
     reads: List[Access] = field(default_factory=list)
     write: Optional[Access] = None
@@ -168,7 +172,7 @@ class _TensorsAccessed:
                 "Found tensor with pointer: %s, but no matching tensor "
                 "allocation in the trace. Backfilling the trace now. "
                 "Perhaps the sanitizer was enabled after some torch operations?",
-                data_ptr
+                data_ptr,
             )
             self.create_tensor(data_ptr, None)
 
@@ -179,7 +183,7 @@ class _TensorsAccessed:
                 "pointer: %s. Assuming the trace for tensor deallocation "
                 "wasn't caught and backfilling it now. "
                 "Perhaps the sanitizer was enabled after some torch operations?",
-                data_ptr
+                data_ptr,
             )
             self.delete_tensor(data_ptr)
 
@@ -226,7 +230,7 @@ class StreamSynchronizations:
                 "Found Stream with id: %s, but no matching stream "
                 "creation in the trace. Backfilling the trace now. "
                 "Perhaps the sanitizer was enabled after some torch operations?",
-                stream
+                stream,
             )
             self.create_stream(stream)
 
@@ -236,7 +240,7 @@ class StreamSynchronizations:
                 "Found Event with id: %s, but no matching event "
                 "creation in the trace. Backfilling the trace now. "
                 "Perhaps the sanitizer was enabled after some torch operations?",
-                event
+                event,
             )
             self.create_event(event)
 
@@ -247,7 +251,7 @@ class StreamSynchronizations:
                 "id: %s. Assuming the trace for event deletion wasn't caught "
                 "and backfilling it now. "
                 "Perhaps the sanitizer was enabled after some torch operations?",
-                event
+                event,
             )
             self.delete_event(event)
 
@@ -257,7 +261,7 @@ class StreamSynchronizations:
                 "Found duplicate Stream creation in the trace for Stream with "
                 "id: %s. PyTorch Streams are only created once, so this "
                 "trace entry is ignored.",
-                stream
+                stream,
             )
         else:
             self.host_sync_state[stream] = 0
@@ -369,7 +373,7 @@ class EventHandler:
         self.seq_num += 1
         self.syncs.update_seq_num(stream, self.seq_num)
         stack_trace = traceback.StackSummary.extract(
-            traceback.walk_stack(None), lookup_lines=False
+            traceback.walk_stack(inspect.currentframe()), lookup_lines=False
         )
         # The stack trace generated in this way is in the inverse order, so it must be
         # reversed.
@@ -428,7 +432,7 @@ class EventHandler:
     def _handle_memory_allocation(self, data_ptr: DataPtr) -> None:
         self.tensors_accessed.ensure_tensor_does_not_exist(data_ptr)
         stack_trace = traceback.StackSummary.extract(
-            traceback.walk_stack(None), lookup_lines=False
+            traceback.walk_stack(inspect.currentframe()), lookup_lines=False
         )
         # The stack trace generated in this way is in the inverse order, so it must be
         # reversed.
@@ -508,7 +512,7 @@ class ArgumentHandler:
     ) -> None:
         for argument, value in zip_arguments(schema, args, kwargs):
             is_write = argument.alias_info is not None and argument.alias_info.is_write
-            tree_map(
+            pytree.tree_map_(
                 functools.partial(
                     self._handle_argument, is_write=is_write, name=argument.name
                 ),
@@ -516,7 +520,7 @@ class ArgumentHandler:
             )
 
     def parse_outputs(self, outputs: Any) -> None:
-        tree_map(
+        pytree.tree_map_(
             functools.partial(self._handle_argument, is_write=True, is_output=True),
             outputs,
         )
@@ -525,35 +529,35 @@ class ArgumentHandler:
 class CUDASanitizerDispatchMode(TorchDispatchMode):
     def __init__(self):
         self.event_handler = EventHandler()
-        torch._C._activate_cuda_trace()
-        cuda_trace.register_callback_for_cuda_event_creation(
+        torch._C._activate_gpu_trace()
+        gpu_trace.register_callback_for_event_creation(
             self.event_handler._handle_event_creation
         )
-        cuda_trace.register_callback_for_cuda_event_deletion(
+        gpu_trace.register_callback_for_event_deletion(
             self.event_handler._handle_event_deletion
         )
-        cuda_trace.register_callback_for_cuda_event_record(
+        gpu_trace.register_callback_for_event_record(
             self.event_handler._handle_event_record
         )
-        cuda_trace.register_callback_for_cuda_event_wait(
+        gpu_trace.register_callback_for_event_wait(
             self.event_handler._handle_event_wait
         )
-        cuda_trace.register_callback_for_cuda_memory_allocation(
+        gpu_trace.register_callback_for_memory_allocation(
             self.event_handler._handle_memory_allocation
         )
-        cuda_trace.register_callback_for_cuda_memory_deallocation(
+        gpu_trace.register_callback_for_memory_deallocation(
             self.event_handler._handle_memory_deallocation
         )
-        cuda_trace.register_callback_for_cuda_stream_creation(
+        gpu_trace.register_callback_for_stream_creation(
             self.event_handler._handle_stream_creation
         )
-        cuda_trace.register_callback_for_cuda_device_synchronization(
+        gpu_trace.register_callback_for_device_synchronization(
             self.event_handler._handle_device_synchronization
         )
-        cuda_trace.register_callback_for_cuda_stream_synchronization(
+        gpu_trace.register_callback_for_stream_synchronization(
             self.event_handler._handle_stream_synchronization
         )
-        cuda_trace.register_callback_for_cuda_event_synchronization(
+        gpu_trace.register_callback_for_event_synchronization(
             self.event_handler._handle_event_synchronization
         )
 
@@ -606,7 +610,7 @@ class CUDASanitizer:
 
 
 def enable_cuda_sanitizer():
-    """Enables CUDA Sanitizer.
+    """Enable CUDA Sanitizer.
 
     The sanitizer will begin to analyze low-level CUDA calls invoked by torch functions
     for synchronization errors. All data races found will be printed to the standard

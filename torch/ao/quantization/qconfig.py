@@ -1,5 +1,7 @@
+# mypy: allow-untyped-defs
 from collections import namedtuple
 from typing import Optional, Any, Union, Type
+from typing_extensions import deprecated
 
 import torch
 import torch.nn as nn
@@ -103,9 +105,13 @@ class QConfig(namedtuple('QConfig', ['activation', 'weight'])):
         if isinstance(activation, nn.Module) or isinstance(weight, nn.Module):
             raise ValueError("QConfig received observer instance, please pass observer class instead. " +
                              "Use MyObserver.with_args(x=1) to override arguments to constructor if needed")
-        return super(QConfig, cls).__new__(cls, activation, weight)
+        return super().__new__(cls, activation, weight)
 
 
+@deprecated(
+    "`QConfigDynamic` is going to be deprecated in PyTorch 1.12, please use `QConfig` instead",
+    category=FutureWarning,
+)
 class QConfigDynamic(namedtuple('QConfigDynamic', ['activation', 'weight'])):
     """
     Describes how to dynamically quantize a layer or a part of the network by providing
@@ -127,8 +133,7 @@ class QConfigDynamic(namedtuple('QConfigDynamic', ['activation', 'weight'])):
         if isinstance(weight, nn.Module):
             raise ValueError("QConfigDynamic received observer instance, please pass observer class instead. " +
                              "Use MyObserver.with_args(x=1) to override arguments to constructor if needed")
-        warnings.warn("QConfigDynamic is going to be deprecated in PyTorch 1.12, please use QConfig instead")
-        return super(QConfigDynamic, cls).__new__(cls, activation, weight)
+        return super().__new__(cls, activation, weight)
 
 
 default_qconfig = QConfig(activation=default_observer,
@@ -236,7 +241,7 @@ def get_default_qconfig(backend='x86', version=0):
     if backend not in supported_backends:
         raise AssertionError(
             "backend: " + str(backend) +
-            " not supported. backend must be one of {}".format(supported_backends)
+            f" not supported. backend must be one of {supported_backends}"
         )
 
     if version == 0:
@@ -326,7 +331,7 @@ def get_default_qat_qconfig(backend='x86', version=1):
     if backend not in supported_backends:
         raise AssertionError(
             "backend: " + str(backend) +
-            " not supported. backend must be one of {}".format(supported_backends)
+            f" not supported. backend must be one of {supported_backends}"
         )
 
     # Histogram observer is too slow for quantization aware training
@@ -422,16 +427,20 @@ _default_quint8_placeholder_qconfig = QConfig(
     weight=None,
 )
 
+@deprecated(
+    "`torch.ao.quantization.get_default_qconfig_dict` is deprecated and will be removed in "
+    "a future version. Please use `torch.ao.quantization.get_default_qconfig_mapping` instead.",
+    category=FutureWarning,
+)
 def get_default_qconfig_dict(backend='x86', version=0):
-    warnings.warn(
-        "torch.ao.quantization.get_default_qconfig_dict is deprecated and will be removed in "
-        "a future version. Please use torch.ao.quantization.get_default_qconfig_mapping instead.")
     return torch.ao.quantization.get_default_qconfig_mapping(backend, version).to_dict()
 
+@deprecated(
+    "`torch.ao.quantization.get_default_qat_qconfig_dict` is deprecated and will be removed in "
+    "a future version. Please use `torch.ao.quantization.get_default_qat_qconfig_mapping` instead.",
+    category=FutureWarning,
+)
 def get_default_qat_qconfig_dict(backend='x86', version=1):
-    warnings.warn(
-        "torch.ao.quantization.get_default_qat_qconfig_dict is deprecated and will be removed in "
-        "a future version. Please use torch.ao.quantization.get_default_qat_qconfig_mapping instead.")
     return torch.ao.quantization.get_default_qat_qconfig_mapping(backend, version).to_dict()
 
 def _assert_valid_qconfig(qconfig: Optional[QConfig],

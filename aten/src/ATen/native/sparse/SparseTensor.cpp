@@ -143,10 +143,10 @@ Tensor values_default(const Tensor& self) {
 /*** Helper methods ***/
 
 static SparseTensor new_sparse(
-    c10::optional<ScalarType> dtype,
-    c10::optional<Layout> layout,
-    c10::optional<Device> device,
-    c10::optional<bool> pin_memory) {
+    std::optional<ScalarType> dtype,
+    std::optional<Layout> layout,
+    std::optional<Device> device,
+    std::optional<bool> pin_memory) {
   AT_ASSERT(layout.has_value() && *layout == kSparse);
   DispatchKey dispatch_key;
   switch (device_or_default(device).type()) {
@@ -170,10 +170,10 @@ SparseTensor new_with_dims_sparse(
     int64_t sparse_dim,
     int64_t dense_dim,
     ArrayRef<int64_t> size,
-    c10::optional<ScalarType> dtype,
-    c10::optional<Layout> layout,
-    c10::optional<Device> device,
-    c10::optional<bool> pin_memory) {
+    std::optional<ScalarType> dtype,
+    std::optional<Layout> layout,
+    std::optional<Device> device,
+    std::optional<bool> pin_memory) {
   SparseTensor self = new_sparse(dtype, layout, device, pin_memory);
   get_sparse_impl(self)->resize_and_clear_(sparse_dim, dense_dim, size);
   return self;
@@ -185,12 +185,14 @@ SparseTensor new_with_dims_and_tensor_sparse_symint(
     c10::SymIntArrayRef size,
     const Tensor& indices,
     const Tensor& values,
-    c10::optional<ScalarType> dtype,
-    c10::optional<Layout> layout,
-    c10::optional<Device> device,
-    c10::optional<bool> pin_memory) {
+    std::optional<ScalarType> dtype,
+    std::optional<Layout> layout,
+    std::optional<Device> device,
+    std::optional<bool> pin_memory,
+    std::optional<bool> is_coalesced) {
   SparseTensor self = new_sparse(dtype, layout, device, pin_memory);
-  get_sparse_impl(self)->resize_(sparse_dim, dense_dim, size);
+  auto impl = get_sparse_impl(self);
+  impl->resize_(sparse_dim, dense_dim, size);
   // NOTE: There is no guarantee that `indices` and `values` don't contain
   // AutogradMeta. However, we want to maintain the invariant that `indices_`
   // and `values_` of a sparse tensor don't contain AutogradMeta, and to achieve
@@ -204,6 +206,20 @@ SparseTensor new_with_dims_and_tensor_sparse_symint(
           /*version_counter=*/values.unsafeGetTensorImpl()->version_counter(),
           /*allow_tensor_metadata_change=*/true));
   alias_into_sparse(self, indices_shallow_copy, values_shallow_copy);
+  // alias_into_sparse overrides coalesced flag, so resetting the flag to
+  // the desired state here:
+  if (is_coalesced.has_value()) {
+    impl->set_coalesced(*is_coalesced);
+  }
+  // TODO: alias_into_sparse sets the coalesce flag to
+  // `self._values().shape[0] < 2`. There exist methods (e.g. permute
+  // on COO tensors when `dims[0] != 0` holds) that force coalesced
+  // flag to false even when nnz is less that 2. Here we cannot
+  // determine if this is the intention of such methods but it is
+  // likely that these methods are overly restrictive when estimating
+  // is_coalesced state. The condition `!is_coalesced && self._nnz() <
+  // 2` provides a way to detect and optimize such methods with
+  // respect to estimating the is_coalesced state.
   return self;
 }
 
@@ -212,11 +228,11 @@ SparseTensor new_with_dims_and_tensor_sparse_symint(
 /** Empty init **/
 Tensor empty_sparse(
     IntArrayRef size,
-    c10::optional<ScalarType> dtype,
-    c10::optional<Layout> layout,
-    c10::optional<Device> device,
-    c10::optional<bool> pin_memory,
-    c10::optional<MemoryFormat> optional_memory_format) {
+    std::optional<ScalarType> dtype,
+    std::optional<Layout> layout,
+    std::optional<Device> device,
+    std::optional<bool> pin_memory,
+    std::optional<MemoryFormat> optional_memory_format) {
   TORCH_CHECK(
       !pin_memory.has_value() || !*pin_memory,
       "Only dense CPU tensors can be pinned");
@@ -226,10 +242,10 @@ Tensor empty_sparse(
 
 /* Shape init */
 Tensor sparse_coo_tensor(IntArrayRef size,
-    c10::optional<ScalarType> dtype,
-    c10::optional<Layout> layout,
-    c10::optional<Device> device,
-    c10::optional<bool> pin_memory) {
+    std::optional<ScalarType> dtype,
+    std::optional<Layout> layout,
+    std::optional<Device> device,
+    std::optional<bool> pin_memory) {
   // See [Note: hacky wrapper removal for TensorOptions]
   TensorOptions options = TensorOptions().dtype(dtype).layout(layout).device(device).pinned_memory(pin_memory);
 
@@ -252,10 +268,11 @@ static inline Tensor expand_values_if_needed(const Tensor& values) {
 } // namespace
 
 Tensor sparse_coo_tensor(const Tensor& indices, const Tensor& values_,
-    c10::optional<ScalarType> dtype,
-    c10::optional<Layout> layout,
-    c10::optional<Device> device,
-    c10::optional<bool> pin_memory) {
+    std::optional<ScalarType> dtype,
+    std::optional<Layout> layout,
+    std::optional<Device> device,
+    std::optional<bool> pin_memory,
+    std::optional<bool> is_coalesced) {
   // See [Note: hacky wrapper removal for TensorOptions]
   TensorOptions options = TensorOptions().dtype(dtype).layout(layout).device(device).pinned_memory(pin_memory);
 
@@ -327,14 +344,17 @@ Tensor sparse_coo_tensor(const Tensor& indices, const Tensor& values_,
       computed_sizes,
       indices,
       values,
-      values.options().layout(kSparse));
+      values.options().layout(kSparse),
+      is_coalesced);
 }
 
 void _validate_sparse_coo_tensor_args(
     const Tensor& indices,
     const Tensor& values_,
-    ArrayRef<int64_t> size) {
+    ArrayRef<int64_t> size,
+    std::optional<bool> is_coalesced_) {
   Tensor values = expand_values_if_needed(values_);
+  bool is_coalesced = is_coalesced_.value_or(false);
 
   // the following checks are redundant because they are also checked in
   // SparseTensorImpl::set_indices_and_values_unsafe but we need to ensure them
@@ -395,16 +415,21 @@ void _validate_sparse_coo_tensor_args(
           " but found index ",
           max_index_in_dim);
     }
+    if (is_coalesced && values.size(0) > 1) {
+      Tensor indices_scalar = flatten_indices(indices, size);
+      Tensor diff = indices_scalar.diff();
+      TORCH_CHECK(diff.min().item().toLong() > 0, "cannot set is_coalesced to true if indices correspond to uncoalesced COO tensor");
+    }
   }
 }
 
 // NB: Got rid of the sizes == NULL case
-
 Tensor sparse_coo_tensor(const Tensor& indices, const Tensor& values, IntArrayRef size,
-    c10::optional<ScalarType> dtype,
-    c10::optional<Layout> layout,
-    c10::optional<Device> device,
-    c10::optional<bool> pin_memory) {
+    std::optional<ScalarType> dtype,
+    std::optional<Layout> layout,
+    std::optional<Device> device,
+    std::optional<bool> pin_memory,
+    std::optional<bool> is_coalesced) {
   // See [Note: hacky wrapper removal for TensorOptions]
   TensorOptions options = TensorOptions().dtype(dtype).layout(layout).device(device).pinned_memory(pin_memory);
   // arg checking
@@ -419,18 +444,20 @@ Tensor sparse_coo_tensor(const Tensor& indices, const Tensor& values, IntArrayRe
       optTypeMetaToScalarType(options.dtype_opt()),
       options.layout_opt(),
       options.device_opt(),
-      options.pinned_memory_opt());
+      options.pinned_memory_opt(),
+      is_coalesced);
 }
 
 Tensor _sparse_coo_tensor_unsafe(const Tensor& indices, const Tensor& values_, at::IntArrayRef size,
-    c10::optional<ScalarType> dtype,
-    c10::optional<Layout> layout,
-    c10::optional<Device> device,
-    c10::optional<bool> pin_memory) {
+    std::optional<ScalarType> dtype,
+    std::optional<Layout> layout,
+    std::optional<Device> device,
+    std::optional<bool> pin_memory,
+    std::optional<bool> is_coalesced) {
   if (at::globalContext().checkSparseTensorInvariants()) {
-    at::native::_validate_sparse_coo_tensor_args(indices, values_, size);
+    at::native::_validate_sparse_coo_tensor_args(indices, values_, size, is_coalesced);
   }
-  return at::native::_sparse_coo_tensor_unsafe_symint(indices, values_, c10::fromIntArrayRefSlow(size), dtype, layout, device, pin_memory);
+  return at::native::_sparse_coo_tensor_unsafe_symint(indices, values_, c10::fromIntArrayRefSlow(size), dtype, layout, device, pin_memory, is_coalesced);
 }
 
 // NOTE: _sparse_coo_tensor_unsafe() differs from sparse_coo_tensor()
@@ -440,10 +467,11 @@ Tensor _sparse_coo_tensor_unsafe(const Tensor& indices, const Tensor& values_, a
 // _validate_sparse_coo_tensor_args before using the tensor.
 // NB: Got rid of the size == NULL case
 Tensor _sparse_coo_tensor_unsafe_symint(const Tensor& indices, const Tensor& values_, c10::SymIntArrayRef size,
-    c10::optional<ScalarType> dtype,
-    c10::optional<Layout> layout,
-    c10::optional<Device> device,
-    c10::optional<bool> pin_memory) {
+    std::optional<ScalarType> dtype,
+    std::optional<Layout> layout,
+    std::optional<Device> device,
+    std::optional<bool> pin_memory,
+    std::optional<bool> is_coalesced) {
   // See [Note: hacky wrapper removal for TensorOptions]
 
   Tensor values = expand_values_if_needed(values_);
@@ -459,14 +487,15 @@ Tensor _sparse_coo_tensor_unsafe_symint(const Tensor& indices, const Tensor& val
       size,
       indices,
       values,
-      values.options().layout(kSparse));
+      values.options().layout(kSparse),
+      is_coalesced);
 }
 
 // NB: Deleted newWithSizeNd variants
 
 SparseTensor clone_sparse(
     const SparseTensor& self,
-    c10::optional<c10::MemoryFormat> optional_memory_format) {
+    std::optional<c10::MemoryFormat> optional_memory_format) {
   TORCH_CHECK(
       !optional_memory_format.has_value(),
       "unsupported memory format option ",
@@ -600,9 +629,7 @@ SparseTensor _coalesce_sparse_cpu(const SparseTensor& self) {
   Tensor newValues = at::empty(values.sizes(), values.options());
   alias_into_sparse(dst, newIndices, newValues);
 
-  Tensor indicesBuffer;
-  Tensor indicesPermutation;
-  std::tie(indicesBuffer, indicesPermutation) = indices_scalar.sort(0);
+  auto [indicesBuffer, indicesPermutation] = indices_scalar.sort(0);
   // NB: The accessor accesses here rely on self._nnz() > 0 (tested earlier in
   // this function)
   auto newIndicesAccessor = newIndices.accessor<int64_t, 2>();
@@ -660,7 +687,7 @@ SparseTensor _coalesce_sparse_cpu(const SparseTensor& self) {
 DEFINE_DISPATCH(sparse_mask_intersection_out_stub);
 DEFINE_DISPATCH(sparse_mask_projection_out_stub);
 
-using OptTensor = c10::optional<Tensor>;
+using OptTensor = std::optional<Tensor>;
 
 static std::tuple<Tensor, Tensor, OptTensor> sparse_mask_like_prepare_sparse_inputs(
     const std::string& method_name,
@@ -700,11 +727,7 @@ static std::tuple<Tensor, Tensor, OptTensor> sparse_mask_like_prepare_sparse_inp
     return res;
   };
 
-  Tensor lhs;
-  OptTensor lhs_hash_opt;
-  bool lhs_is_movable;
-
-  std::tie(lhs, lhs_hash_opt, lhs_is_movable) = [&]() -> auto {
+  auto [lhs, lhs_hash_opt, lhs_is_movable] = [&]() -> auto {
     if (t.is_coalesced()) {
       return std::make_tuple(t, static_cast<OptTensor>(c10::nullopt), false);
     } else {
@@ -714,7 +737,7 @@ static std::tuple<Tensor, Tensor, OptTensor> sparse_mask_like_prepare_sparse_inp
       const auto res_indices = t._indices().index_select(1, argsort_indices_hash);
       const auto res_values = t._values().index_select(0, argsort_indices_hash);
       const auto indices_hash_sorted = indices_hash.index_select(0, argsort_indices_hash);
-      // NOTE: res is not necessariy coalesced, but it is sorted.
+      // NOTE: res is not necessarily coalesced, but it is sorted.
       // We mark it as "coalesced" to skip sorting in the intersection kernel.
       auto res = wrapped_tensor(t, res_indices, res_values)._coalesced_(true);
       return std::make_tuple(std::move(res), static_cast<OptTensor>(std::move(indices_hash_sorted)), true);
@@ -753,9 +776,7 @@ SparseTensor sparse_mask(const Tensor& t, const SparseTensor& mask) {
     }
 
     auto res = at::empty({0}, t.options());
-    Tensor lhs, rhs;
-    OptTensor lhs_hash_opt;
-    std::tie(lhs, rhs, lhs_hash_opt) = sparse_mask_like_prepare_sparse_inputs("sparse_mask", t, mask);
+    auto [lhs, rhs, lhs_hash_opt] = sparse_mask_like_prepare_sparse_inputs("sparse_mask", t, mask);
     sparse_mask_intersection_out_stub(res.device().type(), res, lhs, rhs, lhs_hash_opt);
     return res._coalesced_(mask.is_coalesced());
   }
@@ -786,20 +807,18 @@ Tensor sparse_mask_projection(const Tensor& t, const Tensor& mask, bool accumula
   }
 
   auto res = at::empty({0}, t.options());
-  Tensor lhs, rhs;
-  OptTensor lhs_hash_opt;
-  std::tie(lhs, rhs, lhs_hash_opt) = sparse_mask_like_prepare_sparse_inputs("_sparse_mask_projection", mask, t);
+  auto [lhs, rhs, lhs_hash_opt] = sparse_mask_like_prepare_sparse_inputs("_sparse_mask_projection", mask, t);
   sparse_mask_projection_out_stub(res.device().type(), res, lhs, rhs, lhs_hash_opt, accumulate_matches);
   return res._coalesced_(t.is_coalesced());
 }
 
 Tensor empty_like_sparse_coo(
     const Tensor& self,
-    c10::optional<ScalarType> dtype,
-    c10::optional<Layout> layout,
-    c10::optional<Device> device,
-    c10::optional<bool> pin_memory,
-    c10::optional<c10::MemoryFormat> optional_memory_format) {
+    std::optional<ScalarType> dtype,
+    std::optional<Layout> layout,
+    std::optional<Device> device,
+    std::optional<bool> pin_memory,
+    std::optional<c10::MemoryFormat> optional_memory_format) {
   TensorOptions options_ = TensorOptions().dtype(dtype).layout(layout).device(device).pinned_memory(pin_memory);
 
   TORCH_CHECK(

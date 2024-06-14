@@ -117,10 +117,13 @@ forward graph of the parent module,
     if _equalization_config is None:
         _equalization_config = QConfigMapping()
 
-    if isinstance(prepare_custom_config, Dict):
+    if isinstance(prepare_custom_config, dict):
         warnings.warn(
             "Passing a prepare_custom_config_dict to prepare is deprecated and will not be supported "
-            "in a future version. Please pass in a PrepareCustomConfig instead.")
+            "in a future version. Please pass in a PrepareCustomConfig instead.",
+            FutureWarning,
+            stacklevel=3,
+        )
         prepare_custom_config = PrepareCustomConfig.from_dict(prepare_custom_config)
 
     # swap FloatFunctional with FXFloatFunctional
@@ -222,10 +225,13 @@ def fuse_fx(
     if fuse_custom_config is None:
         fuse_custom_config = FuseCustomConfig()
 
-    if isinstance(fuse_custom_config, Dict):
+    if isinstance(fuse_custom_config, dict):
         warnings.warn(
             "Passing a fuse_custom_config_dict to fuse is deprecated and will not be supported "
-            "in a future version. Please pass in a FuseCustomConfig instead.")
+            "in a future version. Please pass in a FuseCustomConfig instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
         fuse_custom_config = FuseCustomConfig.from_dict(fuse_custom_config)
 
     torch._C._log_api_usage_once("quantization_api.quantize_fx.fuse_fx")
@@ -247,7 +253,7 @@ def prepare_fx(
     _equalization_config: Optional[Union[QConfigMapping, Dict[str, Any]]] = None,
     backend_config: Union[BackendConfig, Dict[str, Any], None] = None,
 ) -> GraphModule:
-    r""" Prepare a model for post training static quantization
+    r""" Prepare a model for post training quantization
 
     Args:
       * `model` (torch.nn.Module): torch.nn.Module model
@@ -276,7 +282,7 @@ def prepare_fx(
 
         import torch
         from torch.ao.quantization import get_default_qconfig_mapping
-        from torch.ao.quantization import prepare_fx
+        from torch.ao.quantization.quantize_fx import prepare_fx
 
         class Submodule(torch.nn.Module):
             def __init__(self):
@@ -414,7 +420,7 @@ def prepare_qat_fx(
 
         import torch
         from torch.ao.quantization import get_default_qat_qconfig_mapping
-        from torch.ao.quantization import prepare_fx
+        from torch.ao.quantization.quantize_fx import prepare_qat_fx
 
         class Submodule(torch.nn.Module):
             def __init__(self):
@@ -511,10 +517,13 @@ def _convert_fx(
     if convert_custom_config is None:
         convert_custom_config = ConvertCustomConfig()
 
-    if isinstance(convert_custom_config, Dict):
+    if isinstance(convert_custom_config, dict):
         warnings.warn(
             "Passing a convert_custom_config_dict to convert is deprecated and will not be supported "
-            "in a future version. Please pass in a ConvertCustomConfig instead.")
+            "in a future version. Please pass in a ConvertCustomConfig instead.",
+            FutureWarning,
+            stacklevel=3,
+        )
         convert_custom_config = ConvertCustomConfig.from_dict(convert_custom_config)
 
     _check_is_graph_module(graph_module)
@@ -655,7 +664,6 @@ def convert_to_reference_fx(
 def _convert_to_reference_decomposed_fx(
     graph_module: GraphModule,
     convert_custom_config: Union[ConvertCustomConfig, Dict[str, Any], None] = None,
-    _remove_qconfig: bool = True,
     qconfig_mapping: Union[QConfigMapping, Dict[str, Any], None] = None,
     backend_config: Union[BackendConfig, Dict[str, Any], None] = None,
 ) -> GraphModule:
@@ -699,7 +707,7 @@ def _convert_to_reference_decomposed_fx(
         graph_module,
         is_reference=True,
         convert_custom_config=convert_custom_config,
-        _remove_qconfig=_remove_qconfig,
+        _remove_qconfig=False,
         qconfig_mapping=qconfig_mapping,
         backend_config=backend_config,
         is_decomposed=True,

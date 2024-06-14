@@ -1,6 +1,10 @@
 #pragma once
 
 #include <c10/util/BFloat16.h>
+#include <c10/util/Float8_e4m3fn.h>
+#include <c10/util/Float8_e4m3fnuz.h>
+#include <c10/util/Float8_e5m2.h>
+#include <c10/util/Float8_e5m2fnuz.h>
 #include <c10/util/Half.h>
 #include <torch/csrc/Export.h>
 #include <cstddef>
@@ -41,7 +45,7 @@
 #define from_le32(x) (x)
 #define to_le64(x) (x)
 #define from_le64(x) (x)
-#else
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 #define to_be16(x) (x)
 #define from_be16(x) (x)
 #define to_be32(x) (x)
@@ -54,10 +58,11 @@
 #define from_le32(x) thp_bswap32(x)
 #define to_le64(x) thp_bswap64(x)
 #define from_le64(x) thp_bswap64(x)
+#else
+#error Unexpected or undefined __BYTE_ORDER__
 #endif
 
-namespace torch {
-namespace utils {
+namespace torch::utils {
 
 enum THPByteOrder { THP_LITTLE_ENDIAN = 0, THP_BIG_ENDIAN = 1 };
 
@@ -154,6 +159,22 @@ TORCH_API void THP_decodeBFloat16Buffer(
     const uint8_t* src,
     THPByteOrder order,
     size_t len);
+TORCH_API void THP_decodeFloat8_e5m2Buffer(
+    at::Float8_e5m2* dst,
+    const uint8_t* src,
+    size_t len);
+TORCH_API void THP_decodeFloat8_e4m3fnBuffer(
+    at::Float8_e4m3fn* dst,
+    const uint8_t* src,
+    size_t len);
+TORCH_API void THP_decodeFloat8_e5m2fnuzBuffer(
+    at::Float8_e5m2fnuz* dst,
+    const uint8_t* src,
+    size_t len);
+TORCH_API void THP_decodeFloat8_e4m3fnuzBuffer(
+    at::Float8_e4m3fnuz* dst,
+    const uint8_t* src,
+    size_t len);
 TORCH_API void THP_decodeComplexFloatBuffer(
     c10::complex<float>* dst,
     const uint8_t* src,
@@ -201,5 +222,4 @@ TORCH_API void THP_encodeComplexDoubleBuffer(
     THPByteOrder order,
     size_t len);
 
-} // namespace utils
-} // namespace torch
+} // namespace torch::utils

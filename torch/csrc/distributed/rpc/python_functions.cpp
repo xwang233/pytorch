@@ -1,5 +1,4 @@
 #include <ATen/ThreadLocalState.h>
-#include <c10/util/C++17.h>
 #include <torch/csrc/distributed/autograd/context/container.h>
 #include <torch/csrc/distributed/autograd/utils.h>
 #include <torch/csrc/distributed/rpc/message.h>
@@ -262,7 +261,7 @@ c10::intrusive_ptr<JitFuture> pyRpcTorchscript(
         functionSchema,
         argsTuple.cast<py::args>(),
         kwargsDict.cast<py::kwargs>(),
-        c10::nullopt);
+        std::nullopt);
   }
   DCHECK(!PyGILState_Check());
   c10::intrusive_ptr<c10::ivalue::Future> fut = rpcTorchscript(
@@ -409,7 +408,7 @@ PyRRef pyRemoteTorchscript(
     // Acquire GIL for py::args and py::kwargs processing.
     py::gil_scoped_acquire ag;
     stack = torch::jit::createStackForSchema(
-        functionSchema, args, kwargs, c10::nullopt);
+        functionSchema, args, kwargs, std::nullopt);
   }
   DCHECK(!PyGILState_Check());
   auto rrefPtr = remoteTorchscript(

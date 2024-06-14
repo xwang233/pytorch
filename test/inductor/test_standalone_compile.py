@@ -1,7 +1,7 @@
 # Owner(s): ["module: inductor"]
 import torch
 from torch import _dynamo as dynamo, _inductor as inductor
-from torch._dynamo.test_case import run_tests, TestCase
+from torch._inductor.test_case import run_tests, TestCase
 from torch._inductor.utils import gen_gm_and_inputs
 from torch.fx import symbolic_trace
 from torch.fx.experimental.proxy_tensor import make_fx
@@ -100,7 +100,7 @@ class TestStandaloneInductor(TestCase):
     def test_inductor_via_op_with_multiple_outputs(self):
         x1 = torch.randn((2, 512, 128))
         x2 = [128]
-        x3 = torch.randn((128))
+        x3 = torch.randn(128)
         x4 = torch.randn((128,))
         x5 = 1e-6
         mod, inp = gen_gm_and_inputs(

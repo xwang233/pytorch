@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 """
 The following example contains a simple MLP model that uses
 different DTensor layouts, and use the checkpointing API to
@@ -22,12 +23,12 @@ from torch.distributed._tensor import (
     Shard,
 )
 from torch.distributed._tensor.placement_types import Placement
-from torch.distributed.tensor.parallel import PairwiseParallel, parallelize_module
+from torch.distributed.tensor.parallel import ColwiseParallel, parallelize_module
 
 
 class SimpleMLP(torch.nn.Module):
     def __init__(self):
-        super(SimpleMLP, self).__init__()
+        super().__init__()
         self.net1 = torch.nn.Linear(5, 128)
         self.relu = torch.nn.ReLU()
         self.net2 = torch.nn.Linear(128, 12)
@@ -45,7 +46,7 @@ def gen_tensor_parallel_model(model: nn.Module, mesh: DeviceMesh) -> nn.Module:
     return parallelize_module(
         model,
         mesh,
-        PairwiseParallel(),
+        {"net1": ColwiseParallel()},
     )
 
 
@@ -76,10 +77,10 @@ def gen_partial_replicate_2d(model: nn.Module, mesh: DeviceMesh) -> nn.Module:
                 module.register_parameter(name, dist_param)
 
     # mark input replicating on mesh
-    def input_fn(inputs, device_mesh):
+    def input_fn(mod, inputs, device_mesh):
         return DTensor.from_local(inputs[0], device_mesh, [Replicate(), Replicate()])
 
-    def output_fn(outputs, device_mesh):
+    def output_fn(mod, outputs, device_mesh):
         assert isinstance(outputs, DTensor)
         return outputs.to_local()
 
@@ -117,10 +118,10 @@ def gen_model_param_in_submesh(model: nn.Module, sub_mesh: DeviceMesh) -> nn.Mod
                 module.register_parameter(name, dist_param)
 
     # mark input replicating on mesh
-    def input_fn(inputs, device_mesh):
+    def input_fn(mod, inputs, device_mesh):
         return DTensor.from_local(inputs[0], device_mesh, [Replicate()])
 
-    def output_fn(outputs, device_mesh):
+    def output_fn(mod, outputs, device_mesh):
         assert isinstance(outputs, DTensor)
         return outputs.to_local()
 
@@ -133,7 +134,7 @@ def gen_model_param_in_submesh(model: nn.Module, sub_mesh: DeviceMesh) -> nn.Mod
     )
 
 
-def checkpoint(model: nn.Module, mesh: DeviceMesh) -> nn.Module:
+def checkpoint(model: nn.Module, mesh: DeviceMesh) -> nn.Module:  # type: ignore[empty-body]
     """
     checkpoint save/load models with DTensor parameters
     """

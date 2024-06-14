@@ -331,12 +331,19 @@ bool LazyGraphExecutor::DataCacheArena::TensorComparer::operator()(
 auto LazyGraphExecutor::DataCacheArena::GetDataCache(
     const BackendDevice& device) -> DataCache* {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = device_caches_.find(device);
-  if (it == device_caches_.end()) {
-    std::unique_ptr<DataCache> cache(new DataCache(max_cache_size_));
-    it = device_caches_.emplace(device, std::move(cache)).first;
+  if (FLAGS_torch_lazy_enable_device_data_cache) {
+    auto it = device_caches_.find(device);
+    if (it == device_caches_.end()) {
+      it = device_caches_
+               .emplace(device, std::make_unique<DataCache>(max_cache_size_))
+               .first;
+    }
+    return it->second.get();
+  } else {
+    // If cache is disabled then always return a zero size cache
+    static DataCache s_empty_cache(0);
+    return &s_empty_cache;
   }
-  return it->second.get();
 }
 
 void LazyGraphExecutor::Register(LazyGraphExecutor* executor) {
@@ -596,6 +603,7 @@ LazyGraphExecutor::SyncTensorCollection LazyGraphExecutor::CollectSyncTensors(
       Value ir_value = tensors[i]->CurrentIrValue();
       if (ir_value) {
         if (ShouldSyncTensor(tensors[i])) {
+          TORCH_LAZY_COUNTER("SyncedTensorsWithIR", 1);
           // Add only tensors which need to be synced.
           coll.hash = HashCombine(coll.hash, ir_value.hash());
           coll.indices.push_back(i);
@@ -603,7 +611,7 @@ LazyGraphExecutor::SyncTensorCollection LazyGraphExecutor::CollectSyncTensors(
       } else if (config.force_ltc_data) {
         // The tensor only has at::Tensor data. We need to queue it for a
         // device upload.
-        c10::optional<at::Tensor> tensor_data = tensors[i]->CurrentTensorData();
+        std::optional<at::Tensor> tensor_data = tensors[i]->CurrentTensorData();
         TORCH_CHECK(tensor_data);
         at_tensors.push_back(*tensor_data);
         devices.push_back(tensors[i]->GetDevice());
@@ -687,7 +695,7 @@ std::vector<torch::lazy::BackendDataPtr> LazyGraphExecutor::SetTensorData(
       // resets the ir_value. We have already done the resetting as part
       // of ExtractIRAndPrepareTensorData to overlap with previous execution.
       tensor->data()->handle = handle;
-      tensor->data()->tensor_data = c10::nullopt;
+      tensor->data()->tensor_data = std::nullopt;
     }
     tensors_data.emplace_back(std::move(handle));
   }
@@ -989,7 +997,7 @@ std::vector<at::Tensor> LazyGraphExecutor::FetchTensors(
       ++literals_index;
       ++sync_index;
     } else {
-      c10::optional<at::Tensor> tensor_data =
+      std::optional<at::Tensor> tensor_data =
           (*tensors)[i]->CurrentTensorData();
       if (tensor_data) {
         results.push_back(*tensor_data);

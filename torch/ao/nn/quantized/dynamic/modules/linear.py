@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 import torch
 import torch.ao.nn.quantized as nnq
 from torch.ao.nn.quantized.modules.utils import _quantize_weight
@@ -64,11 +65,9 @@ class Linear(nnq.Linear):
         return 'DynamicQuantizedLinear'
 
     def extra_repr(self):
-        extra_repr_str = 'in_features={}, out_features={}, dtype={}'.format(
-            self.in_features, self.out_features, self._packed_params.dtype
-        )
+        extra_repr_str = f'in_features={self.in_features}, out_features={self.out_features}, dtype={self._packed_params.dtype}'
         if self._packed_params.dtype == torch.qint8:
-            extra_repr_str += ', qscheme={}'.format(self.weight().qscheme())
+            extra_repr_str += f', qscheme={self.weight().qscheme()}'
         return extra_repr_str
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
@@ -79,7 +78,7 @@ class Linear(nnq.Linear):
                                       missing_keys, unexpected_keys, error_msgs)
 
     @classmethod
-    def from_float(cls, mod):
+    def from_float(cls, mod, use_precomputed_fake_quant=False):
         r"""Create a dynamic quantized module from a float module or qparams_dict
 
         Args:
@@ -105,7 +104,7 @@ class Linear(nnq.Linear):
             weight_observer = default_dynamic_qconfig.weight()
         dtype = weight_observer.dtype
         assert dtype in [torch.qint8, torch.float16], "The only supported dtypes for " \
-            "dynamic quantized linear are qint8 and float16 got: {}".format(dtype)
+            f"dynamic quantized linear are qint8 and float16 got: {dtype}"
         weight_observer(mod.weight)
         if dtype == torch.qint8:
             qweight = _quantize_weight(mod.weight.float(), weight_observer)

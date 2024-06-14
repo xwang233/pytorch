@@ -1,11 +1,7 @@
 # Owner(s): ["module: inductor"]
-import functools
 import unittest
 
-import torch
-import torch._dynamo
 import torch._inductor.config as inductor_config
-import torch._inductor.utils
 from torch._dynamo.test_minifier_common import MinifierTestBase
 from torch.testing._internal.common_utils import (
     IS_JETSON,
@@ -13,9 +9,9 @@ from torch.testing._internal.common_utils import (
     skipIfRocm,
     TEST_WITH_ASAN,
 )
+from torch.testing._internal.inductor_utils import HAS_CUDA
 
-_HAS_TRITON = torch._inductor.utils.has_triton()
-requires_cuda = functools.partial(unittest.skipIf, not _HAS_TRITON, "requires cuda")
+requires_cuda = unittest.skipUnless(HAS_CUDA, "requires cuda")
 
 
 # These minifier tests are slow, because they must be run in separate
@@ -34,14 +30,13 @@ inner(torch.randn(2, 2).to("{device}"))
         # These must isolate because they crash the process
         self._run_full_test(run_code, "aot", expected_error, isolate=True)
 
-    @skipIfRocm
     @unittest.skipIf(IS_JETSON, "Fails on Jetson")
     @inductor_config.patch("cpp.inject_relu_bug_TESTING_ONLY", "runtime_error")
     def test_after_aot_cpu_runtime_error(self):
         self._test_after_aot_runtime_error("cpu", "")
 
     @skipIfRocm
-    @requires_cuda()
+    @requires_cuda
     @inductor_config.patch("triton.inject_relu_bug_TESTING_ONLY", "runtime_error")
     def test_after_aot_cuda_runtime_error(self):
         self._test_after_aot_runtime_error("cuda", "device-side assert")

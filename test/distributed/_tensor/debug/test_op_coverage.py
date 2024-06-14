@@ -3,14 +3,14 @@
 import torch
 import torch.nn as nn
 
-from torch.distributed._tensor.debug.op_coverage import get_inductor_decomp_graphs
+from torch.distributed._tensor.debug._op_coverage import get_inductor_decomp_graphs
 
 from torch.testing._internal.common_utils import run_tests, TestCase
 
 
 class SimpleMLP(nn.Module):
     def __init__(self):
-        super(SimpleMLP, self).__init__()
+        super().__init__()
         self.net1 = nn.Linear(50, 32)
         self.relu = nn.ReLU()
         self.net2 = nn.Linear(32, 8)

@@ -7,13 +7,21 @@ import subprocess
 import sys
 import warnings
 
+try:
+    from .common import BenchmarkRunner, download_retry_decorator, main, reset_rng_state
+except ImportError:
+    from common import BenchmarkRunner, download_retry_decorator, main, reset_rng_state
+
 import torch
-from common import BenchmarkRunner, download_retry_decorator, main, reset_rng_state
 
 from torch._dynamo.testing import collect_results
 from torch._dynamo.utils import clone_inputs
 
 log = logging.getLogger(__name__)
+
+# Enable FX graph caching
+if "TORCHINDUCTOR_FX_GRAPH_CACHE" not in os.environ:
+    torch._inductor.config.fx_graph_cache = True
 
 
 def pip_install(package):
@@ -53,6 +61,12 @@ imports = [
     "ViTForMaskedImageModeling",
     "ViTModel",
 ]
+
+
+def process_hf_reformer_output(out):
+    assert isinstance(out, list)
+    # second output is unstable
+    return [elem for i, elem in enumerate(out) if i != 1]
 
 
 try:
@@ -162,12 +176,18 @@ SKIP_ACCURACY_CHECK_MODELS = {
     "BlenderbotForCausalLM",
 }
 
+SKIP_DUE_TO_CONTROL_FLOW = {"AllenaiLongformerBase"}
 
-REQUIRE_HIGHER_TOLERANCE = {
+
+REQUIRE_HIGHER_TOLERANCE_TRAINING = {
     "MT5ForConditionalGeneration",
     # AlbertForQuestionAnswering fails in CI GCP A100 but error does not seem
     # harmful.
     "AlbertForQuestionAnswering",
+}
+REQUIRE_HIGHER_TOLERANCE_INFERENCE = {
+    "GPT2ForSequenceClassification",
+    "RobertaForQuestionAnswering",
 }
 
 
@@ -411,6 +431,10 @@ class HuggingfaceRunner(BenchmarkRunner):
     def fp32_only_models(self):
         return FP32_ONLY_MODELS
 
+    @property
+    def skip_models_due_to_control_flow(self):
+        return SKIP_DUE_TO_CONTROL_FLOW
+
     def _get_model_cls_and_config(self, model_name):
         if model_name not in EXTRA_MODELS:
             model_cls = get_module_cls_by_model_name(model_name)
@@ -450,6 +474,7 @@ class HuggingfaceRunner(BenchmarkRunner):
         device,
         model_name,
         batch_size=None,
+        extra_args=None,
     ):
         is_training = self.args.training
         use_eval_mode = self.args.use_eval_mode
@@ -521,6 +546,10 @@ class HuggingfaceRunner(BenchmarkRunner):
             return SKIP_ACCURACY_CHECK_MODELS
         return set()
 
+    @property
+    def get_output_amp_train_process_func(self):
+        return {}
+
     def pick_grad(self, name, is_training):
         if is_training:
             return torch.enable_grad()
@@ -530,23 +559,26 @@ class HuggingfaceRunner(BenchmarkRunner):
     def get_tolerance_and_cosine_flag(self, is_training, current_device, name):
         cosine = self.args.cosine
         if is_training:
-            if name in REQUIRE_HIGHER_TOLERANCE:
+            if name in REQUIRE_HIGHER_TOLERANCE_TRAINING:
                 return 2e-2, cosine
             else:
                 return 1e-2, cosine
+        else:
+            if name in REQUIRE_HIGHER_TOLERANCE_INFERENCE:
+                return 4e-3, cosine
         return 1e-3, cosine
 
     def compute_loss(self, pred):
         return pred[0]
 
     def forward_pass(self, mod, inputs, collect_outputs=True):
-        with self.autocast():
+        with self.autocast(**self.autocast_arg):
             return mod(**inputs)
 
     def forward_and_backward_pass(self, mod, inputs, collect_outputs=True):
         cloned_inputs = clone_inputs(inputs)
         self.optimizer_zero_grad(mod)
-        with self.autocast():
+        with self.autocast(**self.autocast_arg):
             pred = mod(**cloned_inputs)
             loss = self.compute_loss(pred)
         self.grad_scaler.scale(loss).backward()

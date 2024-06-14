@@ -44,10 +44,10 @@ Tensor computeSoftmax(
 
   // We do not handle None for dims (input 1) because that is supposed to
   // be deprecated.
-  TORCH_INTERNAL_ASSERT(c10::get_if<int64_t>(&inputs[1]));
+  TORCH_INTERNAL_ASSERT(std::get_if<int64_t>(&inputs[1]));
   int64_t rank = valueShape(inputs[0]).size();
   size_t softmax_dim =
-      normalizeAndCheckIndex(c10::get<int64_t>(inputs[1]), rank);
+      normalizeAndCheckIndex(std::get<int64_t>(inputs[1]), rank);
   std::vector<ExprHandle> non_softmax_dims;
   for (size_t i = 0; i < outputShape.size(); ++i) {
     if (i != softmax_dim) {
@@ -93,17 +93,17 @@ Tensor computeSoftmax(
     return new_indices;
   };
 
-  auto inp_buf = c10::get<BufHandle>(inputs[0]);
+  auto inp_buf = std::get<BufHandle>(inputs[0]);
 
   auto dtype = inp_buf.dtype();
-  if (auto d = c10::get_if<int64_t>(&inputs[2])) {
+  if (auto d = std::get_if<int64_t>(&inputs[2])) {
     dtype = ToDtype(static_cast<ScalarType>(*d));
   }
 
   auto max = Reduce(
       "aten_softmax_max",
       non_softmax_dims,
-      c10::nullopt,
+      std::nullopt,
       Maximum(dtype),
       [&](ParameterList& indices) {
         return tensorOrConstant(
@@ -113,7 +113,7 @@ Tensor computeSoftmax(
   auto e = Compute(
       "aten_softmax_exp",
       outputShape,
-      c10::nullopt,
+      std::nullopt,
       [&](ParameterList& indices) {
         auto inp = tensorOrConstant(
             inputs[0], convert_indices_to_expr_handle(indices));
@@ -122,7 +122,7 @@ Tensor computeSoftmax(
   auto sum = Reduce(
       "aten_softmax_sum",
       non_softmax_dims,
-      c10::nullopt,
+      std::nullopt,
       Sum(),
       [&](ParameterList& indices) {
         return e.load(move_softmax_dim_index_to_pos(indices));
@@ -130,7 +130,7 @@ Tensor computeSoftmax(
       {outputShape[softmax_dim]});
   if (!log_softmax) {
     auto result = Compute(
-        "aten_softmax", outputShape, c10::nullopt, [&](ParameterList& indices) {
+        "aten_softmax", outputShape, std::nullopt, [&](ParameterList& indices) {
           return e.load(indices) / sum.load(remove_softmax_dim_index(indices));
         });
     return Tensor(
@@ -142,12 +142,12 @@ Tensor computeSoftmax(
   auto log_sum = Compute(
       "aten_softmax_log_sum",
       non_softmax_dims,
-      c10::nullopt,
+      std::nullopt,
       [&](ParameterList& indices) { return log(sum.load(indices)); });
   auto result = Compute(
       "aten_log_softmax",
       outputShape,
-      c10::nullopt,
+      std::nullopt,
       [&](ParameterList& indices) {
         auto inp = tensorOrConstant(
             inputs[0], convert_indices_to_expr_handle(indices));

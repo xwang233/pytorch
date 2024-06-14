@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 from typing import List
 
 import torch
@@ -79,6 +80,12 @@ class FloatFunctional(torch.nn.Module):
         r = self.activation_post_process(r)
         return r
 
+    r"""Operation equivalent to ``torch.matmul(Tensor, Tensor)``"""
+    def matmul(self, x: Tensor, y: Tensor) -> Tensor:
+        r = torch.matmul(x, y)
+        r = self.activation_post_process(r)
+        return r
+
 class FXFloatFunctional(torch.nn.Module):
     r""" module to replace FloatFunctional module before FX graph mode quantization,
     since activation_post_process will be inserted in top level module directly
@@ -124,6 +131,11 @@ class FXFloatFunctional(torch.nn.Module):
     def add_relu(self, x: Tensor, y: Tensor) -> Tensor:
         r = torch.add(x, y)
         r = torch.nn.functional.relu(r)
+        return r
+
+    r"""Operation equivalent to ``torch.matmul(Tensor, Tensor)``"""
+    def matmul(self, x: Tensor, y: Tensor) -> Tensor:
+        r = torch.matmul(x, y)
         return r
 
 class QFunctional(torch.nn.Module):
@@ -176,9 +188,7 @@ class QFunctional(torch.nn.Module):
         return 'QFunctional'
 
     def extra_repr(self):
-        return 'scale={}, zero_point={}'.format(
-            self.scale, self.zero_point
-        )
+        return f'scale={self.scale}, zero_point={self.zero_point}'
 
     def forward(self, x):
         raise RuntimeError("Functional is not intended to use the " +
@@ -222,9 +232,16 @@ class QFunctional(torch.nn.Module):
         r = self.activation_post_process(r)
         return r
 
+    r"""Operation equivalent to ``torch.ops.quantized.matmul(Tensor, Tensor)``"""
+    def matmul(self, x: Tensor, y: Tensor) -> Tensor:
+        r = ops.quantized.matmul(x, y, scale=self.scale, zero_point=self.zero_point)
+        # Note: this operation is not observed because the observation is not
+        # needed for the quantized op.
+        return r
+
     @classmethod
-    def from_float(cls, mod):
-        assert type(mod) == FloatFunctional,\
+    def from_float(cls, mod, use_precomputed_fake_quant=False):
+        assert type(mod) == FloatFunctional, \
             "QFunctional.from_float expects an instance of FloatFunctional"
         scale, zero_point = mod.activation_post_process.calculate_qparams()  # type: ignore[operator]
         new_mod = QFunctional()

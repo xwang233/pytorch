@@ -1,12 +1,11 @@
 #include <ATen/TracerMode.h>
 #include <ATen/core/op_registration/op_registration.h>
 #include <c10/core/ScalarType.h>
-#include <c10/util/Optional.h>
 #include <c10/util/irange.h>
 #include <torch/csrc/jit/frontend/tracer.h>
 #include <torch/csrc/jit/ir/ir.h>
-#include <torch/csrc/utils/memory.h>
 #include <torch/library.h>
+#include <optional>
 
 using namespace at;
 
@@ -52,7 +51,7 @@ Tensor& copy_(Tensor& self, const Tensor& src, bool non_blocking) {
 const Tensor& resize_(
     const Tensor& self,
     IntArrayRef size,
-    c10::optional<MemoryFormat> optional_memory_format) {
+    std::optional<MemoryFormat> optional_memory_format) {
   if (torch::jit::tracer::isTracing()) {
     if (jit::tracer::ArgumentStash::hasIntArrayRef("size")) {
       jit::tracer::ArgumentStash::popIntArrayRef("size");
@@ -63,7 +62,7 @@ const Tensor& resize_(
 
   {
     at::tracer::impl::NoTracerDispatchMode tracer_guard;
-    self.resize_(size, std::move(optional_memory_format));
+    self.resize_(size, optional_memory_format);
   }
   return self;
 }
@@ -71,7 +70,7 @@ const Tensor& resize_(
 const Tensor& resize_as_(
     const Tensor& self,
     const Tensor& the_template,
-    c10::optional<MemoryFormat> optional_memory_format) {
+    std::optional<MemoryFormat> optional_memory_format) {
   if (torch::jit::tracer::isTracing()) {
     jit::tracer::warn("resize_as_", jit::tracer::WARN_RESIZE);
     jit::tracer::delValueTrace(self);
@@ -79,7 +78,7 @@ const Tensor& resize_as_(
 
   {
     at::tracer::impl::NoTracerDispatchMode tracer_guard;
-    self.resize_as_(the_template, std::move(optional_memory_format));
+    self.resize_as_(the_template, optional_memory_format);
   }
   return self;
 }
@@ -177,7 +176,8 @@ static void general_trace_function(
     tracer::recordSourceLocation(node);
     const auto& args = op.schema().arguments();
     int i = 0;
-    for (auto iter = stack->end() - input_size; iter != stack->end();
+    for (auto iter = stack->end() - static_cast<std::ptrdiff_t>(input_size);
+         iter != stack->end();
          ++iter, ++i) {
       // TODO we need to refactor graph APIs (e.g., addInputs)
       // appropriately; after that, we can get rid of the giant if-else
@@ -267,7 +267,8 @@ static void general_trace_function(
   if (tracer_state) {
     tracer::setTracingState(std::move(tracer_state));
     int i = 0;
-    for (auto iter = stack->end() - output_size; iter != stack->end();
+    for (auto iter = stack->end() - static_cast<std::ptrdiff_t>(output_size);
+         iter != stack->end();
          ++iter, ++i) {
       const auto& type = op.schema().returns()[i].type();
       if (type->isSubtypeOf(*TensorType::get())) {

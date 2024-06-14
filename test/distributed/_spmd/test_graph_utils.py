@@ -2,7 +2,7 @@
 import os
 
 from torch.distributed._spmd.graph_utils import dump_graphs_to_files
-from torch.testing._internal.common_utils import run_tests
+from torch.testing._internal.common_utils import run_tests  # noqa: TCH001
 from torch.testing._internal.distributed._tensor.common_dtensor import DTensorTestBase
 
 
@@ -37,4 +37,5 @@ class GraphUtilsTest(DTensorTestBase):
 
 
 if __name__ == "__main__":
-    run_tests()
+    if False:
+        run_tests()

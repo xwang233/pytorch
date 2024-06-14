@@ -117,10 +117,10 @@ void call_dependent_methods(std::set<std::string>& root_ops) {
   if (is_training && has_batchnorm) {
     at::batch_norm(
         at::ones({2, 2}),
-        c10::nullopt,
-        c10::nullopt,
-        c10::nullopt,
-        c10::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
         true,
         0.1,
         0.1,
@@ -342,6 +342,16 @@ TracerResult trace_run(const std::vector<std::string>& input_module_paths) {
       std::cerr
           << "ModelTracer encountered an error while attempting to run the model in FBGEMM mode"
           << ex.what() << "\n Skipping FBGEMM execution" << std::endl;
+    }
+    try {
+      at::globalContext().setQEngine(at::QEngine::QNNPACK);
+      c10::InferenceMode guard(true);
+      run_model(
+          input_module_path, root_ops, enabled_backends, called_kernel_tags);
+    } catch (std::exception& ex) {
+      std::cerr
+          << "ModelTracer encountered an error while attempting to run the model under an inference guard"
+          << ex.what() << "\n Skipping inference guard execution" << std::endl;
     }
   }
 

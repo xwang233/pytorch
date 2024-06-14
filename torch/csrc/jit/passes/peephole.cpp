@@ -12,7 +12,6 @@
 #include <torch/csrc/jit/passes/peephole_list_idioms.h>
 #include <torch/csrc/jit/passes/peephole_non_tensor.h>
 #include <torch/csrc/jit/runtime/graph_executor.h>
-#include <torch/csrc/utils/memory.h>
 
 namespace torch {
 namespace jit {
@@ -20,7 +19,7 @@ namespace jit {
 // Conservatively compare two optionals. If both are undefined, assume
 // they aren't equal
 template <typename T>
-static bool mustBeEqual(const c10::optional<T>& a, const c10::optional<T>& b) {
+static bool mustBeEqual(const std::optional<T>& a, const std::optional<T>& b) {
   return a == b && a.has_value();
 }
 

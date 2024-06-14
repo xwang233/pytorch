@@ -2,9 +2,9 @@
 
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
-#include <c10/util/Optional.h>
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 // NCCL BFloat16 is enabled only for CUDA 11+ and NCCL versions 2.10+, or for
@@ -18,9 +18,7 @@
 #define HAS_NCCL_BF16_DATATYPE 0
 #endif
 
-namespace torch {
-namespace cuda {
-namespace nccl {
+namespace torch::cuda::nccl {
 
 /* The following are copied from <nccl.h> and redefined in torch::cuda::nccl
  * namespace */
@@ -78,9 +76,9 @@ enum class ncclDataType {
 // manages group and lock lifetimes.
 struct AutoNcclGroup {
   AutoNcclGroup();
-  AutoNcclGroup(std::vector<ncclComm_t>& comms, bool comm_nonblocking);
+  AutoNcclGroup(ncclComm_t comm, bool comm_nonblocking);
   ~AutoNcclGroup() noexcept(false);
-  std::vector<ncclComm_t> comms_;
+  ncclComm_t comm_;
   bool comm_nonblocking_;
 };
 
@@ -90,7 +88,7 @@ namespace detail {
 
 TORCH_CUDA_CPP_API void throw_nccl_error(ncclResult status);
 
-static inline void NCCL_CHECK(ncclResult status) {
+inline void NCCL_CHECK(ncclResult status) {
   if (status != ncclResult::Success) {
     throw_nccl_error(status);
   }
@@ -113,9 +111,10 @@ TORCH_CUDA_CPP_API void check_inputs(
 } // namespace detail
 
 using comm_list = std::vector<ncclComm_t>;
-using stream_list = std::vector<c10::optional<at::cuda::CUDAStream>>;
+using stream_list = std::vector<std::optional<at::cuda::CUDAStream>>;
 
 TORCH_CUDA_CPP_API std::uint64_t version();
+TORCH_CUDA_CPP_API const char* version_suffix();
 
 bool is_available(at::TensorList tensors);
 
@@ -216,6 +215,4 @@ TORCH_CUDA_CPP_API void recv(
     ncclComm_t comm,
     at::cuda::CUDAStream stream,
     int src);
-} // namespace nccl
-} // namespace cuda
-} // namespace torch
+} // namespace torch::cuda::nccl

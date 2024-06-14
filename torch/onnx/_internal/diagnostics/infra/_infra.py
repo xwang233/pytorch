@@ -1,10 +1,11 @@
+# mypy: allow-untyped-defs
 """This file defines an additional layer of abstraction on top of the SARIF OM."""
 
 from __future__ import annotations
 
 import dataclasses
 import enum
-import pprint
+import logging
 from typing import FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from torch.onnx._internal.diagnostics.infra import formatter, sarif
@@ -49,7 +50,7 @@ class Tag(enum.Enum):
 class PatchedPropertyBag(sarif.PropertyBag):
     """Key/value pairs that provide additional information about the object.
 
-    The definition of PropertyBag via SARIF spec is "A property bag is an object (§3.6)
+    The definition of PropertyBag via SARIF spec is "A property bag is an object (section 3.6)
     containing an unordered set of properties with arbitrary names." However it is not
     reflected in the json file, and therefore not captured by the python representation.
     This patch adds additional **kwargs to the `__init__` method to allow recording
@@ -131,9 +132,6 @@ class Rule:
         """
         return self.message_default_template.format(*args, **kwargs)
 
-    def pretty_print(self):
-        pass
-
 
 @dataclasses.dataclass
 class Location:
@@ -162,16 +160,6 @@ class Location:
             else None,
         )
 
-    def pretty_print(self):
-        """Prints the location in a traceback style format."""
-        unknown = "<unknown>"
-        snippet = self.snippet or unknown
-        uri = self.uri or unknown
-        function = self.function or unknown
-        lineno = self.line if self.line is not None else unknown
-        message = f"  # {self.message}" if self.message is not None else ""
-        print(f'  File "{uri}", line {lineno}, in {function}\n    {snippet}{message}')
-
 
 @dataclasses.dataclass
 class StackFrame:
@@ -180,10 +168,6 @@ class StackFrame:
     def sarif(self) -> sarif.StackFrame:
         """Returns the SARIF representation of this stack frame."""
         return sarif.StackFrame(location=self.location.sarif())
-
-    def pretty_print(self):
-        """Prints the stack frame in a human-readable format."""
-        self.location.pretty_print()
 
 
 @dataclasses.dataclass
@@ -202,12 +186,6 @@ class Stack:
             else None,
         )
 
-    def pretty_print(self):
-        """Prints the stack in a human-readable format."""
-        formatter.pretty_print_title(f"Stack: {self.message}", fill_char="-")
-        for frame in reversed(self.frames):
-            frame.pretty_print()
-
 
 @dataclasses.dataclass
 class ThreadFlowLocation:
@@ -225,15 +203,6 @@ class ThreadFlowLocation:
             state=self.state,
             stack=self.stack.sarif() if self.stack is not None else None,
         )
-
-    def pretty_print(self, verbose: bool = False):
-        """Prints the thread flow location in a human-readable format."""
-        formatter.pretty_print_title(f"Step {self.index}", fill_char="-")
-        self.location.pretty_print()
-        if verbose:
-            print(f"State: {pprint.pformat(self.state)}")
-            if self.stack is not None:
-                self.stack.pretty_print()
 
 
 @dataclasses.dataclass
@@ -254,22 +223,6 @@ class Graph:
             description=sarif.Message(text=self.graph),
             properties=PatchedPropertyBag(name=self.name, description=self.description),
         )
-
-    def pretty_print(
-        self,
-        verbose: bool = False,
-    ):
-        """Prints the diagnostics in a human-readable format.
-
-        Args:
-            verbose: If True, prints all information. Otherwise, only prints compact
-                information. E.g., graph name and description.
-            log_level: The minimum level of diagnostics to print.
-        """
-        formatter.pretty_print_title(f"Graph: {self.name}", fill_char="-")
-        print(self.description)
-        if verbose:
-            print(self.graph)
 
 
 @dataclasses.dataclass
@@ -312,14 +265,21 @@ class Invocation:
     # TODO: Implement this.
     # Tracks top level call arguments and diagnostic options.
     def __init__(self) -> None:
-        raise NotImplementedError()
+        raise NotImplementedError
 
 
 @dataclasses.dataclass
 class DiagnosticOptions:
-    """
-    Options for diagnostic context.
+    """Options for diagnostic context.
+
+    Attributes:
+        verbosity_level: Set the amount of information logged for each diagnostics,
+            equivalent to the 'level' in Python logging module.
+        warnings_as_errors: When True, warning diagnostics are treated as error diagnostics.
     """
 
-    log_verbose: bool = dataclasses.field(default=False)
-    log_level: Level = dataclasses.field(default=Level.ERROR)
+    verbosity_level: int = dataclasses.field(default=logging.INFO)
+    """Set the amount of information logged for each diagnostics, equivalent to the 'level' in Python logging module."""
+
+    warnings_as_errors: bool = dataclasses.field(default=False)
+    """If True, warning diagnostics are treated as error diagnostics."""

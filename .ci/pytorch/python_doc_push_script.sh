@@ -26,8 +26,8 @@ echo "error: python_doc_push_script.sh: version (arg2) not specified"
 fi
 
 # Argument 1: Where to copy the built documentation to
-# (pytorch.github.io/$install_path)
-install_path="${1:-${DOCS_INSTALL_PATH:-docs/${DOCS_VERSION}}}"
+# (pytorch_docs/$install_path)
+install_path="${1:-${DOCS_INSTALL_PATH:-${DOCS_VERSION}}}"
 if [ -z "$install_path" ]; then
 echo "error: python_doc_push_script.sh: install_path (arg1) not specified"
   exit 1
@@ -68,8 +68,8 @@ build_docs () {
 }
 
 
-git clone https://github.com/pytorch/pytorch.github.io -b "$branch" --depth 1
-pushd pytorch.github.io
+git clone https://github.com/pytorch/docs pytorch_docs -b "$branch" --depth 1
+pushd pytorch_docs
 
 export LC_ALL=C
 export PATH=/opt/conda/bin:$PATH
@@ -85,9 +85,8 @@ pushd docs
 
 # Build the docs
 if [ "$is_main_doc" = true ]; then
-  if ! build_docs html; then
-    exit $?
-  fi
+  build_docs html || exit $?
+
   make coverage
   # Now we have the coverage report, we need to make sure it is empty.
   # Count the number of lines in the file and turn that number into a variable
@@ -106,13 +105,12 @@ if [ "$is_main_doc" = true ]; then
     echo undocumented objects found:
     cat build/coverage/python.txt
     echo "Make sure you've updated relevant .rsts in docs/source!"
+    echo "You can reproduce locally by running 'cd docs && make coverage && cat build/coverage/python.txt'"
     exit 1
   fi
 else
   # skip coverage, format for stable or tags
-  if ! build_docs html-stable; then
-    exit $?
-  fi
+  build_docs html-stable || exit $?
 fi
 
 # Move them into the docs repo

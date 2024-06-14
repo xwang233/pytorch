@@ -47,7 +47,7 @@ def parse_backend_yaml(
         )
     }
 
-    with open(backend_yaml_path, "r") as f:
+    with open(backend_yaml_path) as f:
         yaml_values = yaml.load(f, Loader=YamlLoader)
     assert isinstance(yaml_values, dict)
 
@@ -108,10 +108,10 @@ def parse_backend_yaml(
     supported.extend(full_codegen)
 
     # non_native is ignored by parse_backend_yaml, and re-parsed in gen_lazy_tensor.py
-    non_native = yaml_values.pop("non_native", {})
+    yaml_values.pop("non_native", {})
 
     # ir_gen is ignored by parse_backend_yaml, and re-parsed in gen_lazy_tensor.py
-    _ = yaml_values.pop("ir_gen", {})
+    yaml_values.pop("ir_gen", {})
 
     assert (
         len(yaml_values.keys()) == 0
@@ -253,9 +253,9 @@ def error_on_missing_kernels(
     full_codegen: Optional[List[OperatorName]] = None,
 ) -> None:
     try:
-        with open(kernel_defn_file_path, "r") as f:
+        with open(kernel_defn_file_path) as f:
             backend_defns = f.read()
-    except IOError as e:
+    except OSError as e:
         raise AssertionError(
             f"Unable to read from the specified impl_path file: {kernel_defn_file_path}"
         ) from e

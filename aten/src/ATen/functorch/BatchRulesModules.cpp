@@ -10,7 +10,7 @@
 
 #include <utility>
 
-namespace at { namespace functorch {
+namespace at::functorch {
 
 static Tensor getStepTensor(const Tensor& indices, const c10::SymInt& bdim_size, const c10::SymInt& num_embeddings) {
   // [batch_size, 1, 1, 1, ..., 1]
@@ -218,16 +218,16 @@ cudnn_grid_sample_backward_batch_rule(
 // TODO: replace with targetable functionalization
 static Tensor one_hot_decomposition_hack(const Tensor &self, int64_t num_classes) {
     TORCH_CHECK(self.dtype() == kLong, "one_hot is only applicable to index tensor.");
-    auto shape = self.sizes().vec();
+    auto shape = self.sym_sizes().vec();
 
     // empty tensor could be converted to one hot representation,
     // but shape inference is not possible.
-    if (self.numel() == 0) {
+    if (self.sym_numel() == 0) {
         if (num_classes <= 0) {
             AT_ERROR("Can not infer total number of classes from empty tensor.");
         } else {
             shape.push_back(num_classes);
-            return at::empty(shape, self.options());
+            return at::empty_symint(shape, self.options());
         }
     }
 
@@ -247,7 +247,7 @@ static Tensor one_hot_decomposition_hack(const Tensor &self, int64_t num_classes
     // }
 
     shape.push_back(num_classes);
-    Tensor ret = at::zeros(shape, self.options());
+    Tensor ret = at::zeros_symint(shape, self.options());
     return ret.scatter(-1, self.unsqueeze(-1), 1);
 }
 
@@ -344,10 +344,6 @@ struct CudnnGridSampleBackwardBatchRuleHelper {
       &ATEN_FN(op),\
       c10::guts::function_traits<decltype(ATEN_FN(op))>::parameter_types>::apply))
 
-#define UPSAMPLE_BATCH(op) \
-  EXISTING_BDIM2(op, vec); \
-  EXISTING_BDIM(op);
-
 
 TORCH_LIBRARY_IMPL(aten, FuncTorchBatched, m) {
   EXISTING_BDIM(im2col);
@@ -384,13 +380,15 @@ TORCH_LIBRARY_IMPL(aten, FuncTorchBatched, m) {
   EXISTING_BDIM_ALL_BOXED(reflection_pad2d_backward);
   EXISTING_BDIM_ALL_BOXED(reflection_pad3d_backward);
 
-  UPSAMPLE_BATCH(upsample_bicubic2d);
-  UPSAMPLE_BATCH(upsample_bilinear2d);
-  UPSAMPLE_BATCH(upsample_linear1d);
-  UPSAMPLE_BATCH(upsample_nearest1d);
-  UPSAMPLE_BATCH(upsample_nearest2d);
-  UPSAMPLE_BATCH(upsample_nearest3d);
-  UPSAMPLE_BATCH(upsample_trilinear3d);
+  EXISTING_BDIM(upsample_bicubic2d);
+  EXISTING_BDIM(upsample_bilinear2d);
+  EXISTING_BDIM(upsample_linear1d);
+  EXISTING_BDIM(upsample_nearest1d);
+  EXISTING_BDIM(upsample_nearest2d);
+  EXISTING_BDIM(upsample_nearest3d);
+  EXISTING_BDIM(upsample_trilinear3d);
+  EXISTING_BDIM(_upsample_bilinear2d_aa);
+  EXISTING_BDIM(_upsample_bicubic2d_aa);
 
   UPSAMPLE_BACKWARD(upsample_bicubic2d_backward);
   UPSAMPLE_BACKWARD(upsample_bilinear2d_backward);
@@ -399,6 +397,10 @@ TORCH_LIBRARY_IMPL(aten, FuncTorchBatched, m) {
   UPSAMPLE_BACKWARD(upsample_nearest2d_backward);
   UPSAMPLE_BACKWARD(upsample_nearest3d_backward);
   UPSAMPLE_BACKWARD(upsample_trilinear3d_backward);
+  UPSAMPLE_BACKWARD(_upsample_bilinear2d_aa_backward);
+  UPSAMPLE_BACKWARD(_upsample_bicubic2d_aa_backward);
+
   m.impl("one_hot", one_hot_decomposition_hack);
 }
-}}
+
+} // namespace at::functorch

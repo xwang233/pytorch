@@ -9,10 +9,13 @@
 #include <ATen/ops/constant_pad_nd_native.h>
 #include <ATen/ops/reflection_pad1d_backward_native.h>
 #include <ATen/ops/reflection_pad1d_native.h>
+#include <ATen/ops/reflection_pad2d_backward_native.h>
+#include <ATen/ops/reflection_pad2d_native.h>
 #include <ATen/ops/reflection_pad3d_backward_native.h>
 #include <ATen/ops/reflection_pad3d_native.h>
 #include <ATen/ops/replication_pad1d_backward_native.h>
 #include <ATen/ops/replication_pad1d_native.h>
+#include <ATen/ops/replication_pad2d_backward_native.h>
 #include <ATen/ops/replication_pad2d_native.h>
 #include <ATen/ops/replication_pad3d_backward_native.h>
 #include <ATen/ops/replication_pad3d_native.h>
@@ -22,13 +25,13 @@ namespace at::native {
 namespace mps {
 
 // Pad operations (1D/2D/3D forward and backward)
-Tensor& pad_out_template(Tensor& output,
-                         const Tensor& input_,
-                         IntArrayRef padding,
-                         const c10::optional<Tensor>& grad_output_opt,
-                         MPSGraphPaddingMode mode,
-                         double constantValue,
-                         const string op_name) {
+static Tensor& pad_out_template(Tensor& output,
+                                const Tensor& input_,
+                                IntArrayRef padding,
+                                const c10::optional<Tensor>& grad_output_opt,
+                                MPSGraphPaddingMode mode,
+                                double constantValue,
+                                const string op_name) {
   using CachedGraph = MPSUnaryGradCachedGraph;
   const int padding_size = (int)padding.size();
   int padding_dim = padding_size / 2; // either 1D, 2D, or 3D
@@ -314,9 +317,7 @@ Tensor& pad_out_template(Tensor& output,
     if (is_backward_pass) {
       feeds[gradOutputPlaceholder.getMPSGraphTensor()] = gradOutputPlaceholder.getMPSGraphTensorData();
     }
-    NSDictionary<MPSGraphTensor*, MPSGraphTensorData*>* results =
-        @{outputPlaceholder.getMPSGraphTensor() : outputPlaceholder.getMPSGraphTensorData()};
-    runMPSGraph(getCurrentMPSStream(), cachedGraph->graph(), feeds, results);
+    runMPSGraph(getCurrentMPSStream(), cachedGraph->graph(), feeds, outputPlaceholder);
   }
   return output;
 }
@@ -464,7 +465,7 @@ Tensor replication_pad3d_backward_mps(const Tensor& grad_output, const Tensor& i
   return mps::pad_out_template(grad_input, input, padding, grad_output, MPSGraphPaddingModeClampToEdge, 0.0, __func__);
 }
 
-// backward pass is exlicitly handled in autograd by negating the "pad" argument
+// backward pass is explicitly handled in autograd by negating the "pad" argument
 Tensor constant_pad_nd_mps(const Tensor& self, IntArrayRef pad, const Scalar& value) {
   if (pad.size() > 6) {
     TORCH_WARN_ONCE("MPS: The constant padding of more than 3 dimensions is not currently supported natively. ",

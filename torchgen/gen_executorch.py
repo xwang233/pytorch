@@ -123,10 +123,19 @@ class ComputeFunction:
 
     @method_with_native_function
     def __call__(self, f: NativeFunction) -> Optional[str]:
+        is_method_variant = False
         if not self.selector.is_root_operator(f"{f.namespace}::{f.func.name}"):
             return None
-        if Variant.function not in f.variants:
-            return None
+
+        if Variant.function not in f.variants and Variant.method in f.variants:
+            is_method_variant = True
+
+        # only valid remaining case is only function is in f.variants
+        elif not (Variant.function in f.variants and Variant.method not in f.variants):
+            raise Exception(  # noqa: TRY002
+                f"Can't handle native function {f.func} with the following variant specification {f.variants}."
+            )
+
         sig: Union[CppSignature, ExecutorchCppSignature] = (
             CppSignatureGroup.from_native_function(
                 f, method=False, fallback_binding=f.manual_cpp_binding
@@ -137,7 +146,15 @@ class ComputeFunction:
         if self.use_aten_lib and not self.is_custom_op(f):
             comma = ", "
 
-            return f"""
+            if is_method_variant:
+                return f"""
+// {f.namespace}::{f.func}
+TORCH_API inline {_sig_decl_wrapper(sig)} {{
+    return {sig.arguments()[0].name}.{sig.name()}({comma.join(e.name for e in sig.arguments()[1:])});
+}}
+"""
+            else:
+                return f"""
 // {f.namespace}::{f.func}
 TORCH_API inline {_sig_decl_wrapper(sig)} {{
     return at::{sig.name()}({comma.join(e.name for e in sig.arguments())});
@@ -206,24 +223,39 @@ class ComputeCodegenUnboxedKernels:
         arg_connector = ", "
 
         args_str = f"{arg_connector.join(e.name for e in binding_list)}"
+        event_tracer_output_logging = ""
+        output_ids = []
 
         if len(f.func.returns) == 0:
             if len(f.func.arguments.out) == 0:
-                raise Exception(
+                raise Exception(  # noqa: TRY002
                     f"Can't handle native function {f.func} with no returns and no out yet."
                 )
             out = f.func.arguments.out[0]
             return_assignment = f"""stack[{len(binding_list)}] = &{out.name};"""
             ret_prefix = ""
+            output_ids = [len(binding_list)]
         else:
             if len(f.func.arguments.out) == 0:
                 return_assignment = (
                     f"""*stack[{len(binding_list)}] = EValue(result_);"""
                 )
                 ret_prefix = return_type_gen(f.func.returns).cpp_type() + " result_ = "
+                output_ids = [len(binding_list)]
             else:
                 return_assignment = ""
                 ret_prefix = ""
+                output_ids = [
+                    len(binding_list) - (i + 1)
+                    for i in reversed(range(len(f.func.arguments.out)))
+                ]
+
+        for output_id in output_ids:
+            event_tracer_output_logging += (
+                f"internal::event_tracer_log_evalue("
+                f"context.internal_event_tracer(), "
+                f"*stack[{output_id}]);\n"
+            )
 
         newline = "\n    "
         return "\n".join(
@@ -234,9 +266,10 @@ Kernel(
     []({contextArg.defn()}, EValue** stack) {{
         {code_connector.join(code_list)}
 
+        internal::EventTracerProfileScope event_tracer_scope(context.internal_event_tracer(), "native_call_{f.func.name}");
         EXECUTORCH_SCOPE_PROF("native_call_{f.func.name}");
         {ret_prefix}{kernel_call}(context, {args_str});
-
+        {event_tracer_output_logging}
         {return_assignment}
     }}
 ),
@@ -253,6 +286,7 @@ def gen_unboxing(
     selector: SelectiveBuilder,
     use_aten_lib: bool,
     kernel_index: ETKernelIndex,
+    manual_registration: bool,
 ) -> None:
     # Iterable type for write_sharded is a Tuple of (native_function, (kernel_key, metadata))
     def key_func(
@@ -267,9 +301,13 @@ def gen_unboxing(
     ]
 
     header = ["Functions.h" if use_aten_lib else "NativeFunctions.h"]
-
+    filename = (
+        "RegisterKernels.cpp"
+        if manual_registration
+        else "RegisterCodegenUnboxedKernels.cpp"
+    )
     cpu_fm.write_sharded(
-        "RegisterCodegenUnboxedKernels.cpp",
+        filename,
         items,
         key_fn=key_func,
         env_callable=lambda unbox_kernel_entry: {
@@ -329,7 +367,6 @@ def gen_functions_declarations(
     # convert kernel index to BackendIndex. This is because we can't handle ETKernelIndex yet.
     # TODO larryliu: evaluate if this code is still needed. If yes let it handle ETKernelIndex.
 
-    dispatch_key = DispatchKey.CPU
     backend_index = kernel_index._to_backend_index()
 
     ns_grouped_functions = defaultdict(list)
@@ -426,6 +463,10 @@ def gen_headers(
                     backend_indices=backend_indices,
                     native_function_decl_gen=dest.compute_native_function_declaration,
                 ),
+                "headers": [
+                    "#include <ATen/ATen.h>",
+                    "#include <torch/torch.h>",
+                ],
             },
         )
         aten_headers.append('#include "CustomOpsNativeFunctions.h"')
@@ -444,16 +485,32 @@ def gen_headers(
             ),
         },
     )
+    cpu_fm.write(
+        "RegisterKernels.h",
+        lambda: {
+            "generated_comment": "@" + "generated by torchgen/gen_executorch.py",
+        },
+    )
+    headers = {
+        "headers": [
+            "#include <executorch/runtime/core/exec_aten/exec_aten.h> // at::Tensor etc.",
+            "#include <executorch/codegen/macros.h> // TORCH_API",
+            "#include <executorch/runtime/kernel/kernel_runtime_context.h>",
+        ],
+    }
     if use_aten_lib:
         cpu_fm.write(
             "NativeFunctions.h",
-            lambda: {
-                "nativeFunctions_declarations": get_native_function_declarations(
-                    grouped_native_functions=native_functions,
-                    backend_indices=backend_indices,
-                    native_function_decl_gen=dest.compute_native_function_declaration,
-                ),
-            },
+            lambda: dict(
+                {
+                    "nativeFunctions_declarations": get_native_function_declarations(
+                        grouped_native_functions=native_functions,
+                        backend_indices=backend_indices,
+                        native_function_decl_gen=dest.compute_native_function_declaration,
+                    ),
+                },
+                **headers,
+            ),
         )
     else:
         ns_grouped_kernels = get_ns_grouped_kernels(
@@ -463,11 +520,14 @@ def gen_headers(
         )
         cpu_fm.write(
             "NativeFunctions.h",
-            lambda: {
-                "nativeFunctions_declarations": get_native_function_declarations_from_ns_grouped_kernels(
-                    ns_grouped_kernels=ns_grouped_kernels,
-                ),
-            },
+            lambda: dict(
+                {
+                    "nativeFunctions_declarations": get_native_function_declarations_from_ns_grouped_kernels(
+                        ns_grouped_kernels=ns_grouped_kernels,
+                    ),
+                },
+                **headers,
+            ),
         )
 
 
@@ -575,7 +635,7 @@ def translate_native_yaml(
         None
     """
     if use_aten_lib:
-        with open(aten_yaml_path, "r") as aten_yaml:
+        with open(aten_yaml_path) as aten_yaml:
             out_file.writelines(aten_yaml.readlines())
         return
 
@@ -604,7 +664,7 @@ def translate_native_yaml(
         or os.stat(native_yaml_path).st_size == 0
     ):
         return
-    with open(native_yaml_path, "r") as native_yaml:
+    with open(native_yaml_path) as native_yaml:
         native_es = yaml.load(native_yaml, Loader=LineLoader)
         if not native_es:
             return
@@ -641,7 +701,7 @@ def parse_yaml(
     Union[Dict[DispatchKey, Dict[OperatorName, BackendMetadata]], ETKernelIndex],
 ]:
     if path and os.path.exists(path) and os.stat(path).st_size > 0:
-        with open(path, "r") as f:
+        with open(path) as f:
             es = yaml.load(f, Loader=LineLoader)
 
         # Check for kernel index structure
@@ -847,6 +907,13 @@ def main() -> None:
         "operator",
     )
     parser.add_argument(
+        "--manual_registration",
+        "--manual-registration",
+        action="store_true",
+        help="a boolean flag to indicate whether we want to manually call"
+        "register_kernels() or rely on static init. ",
+    )
+    parser.add_argument(
         "--generate",
         type=str,
         nargs="*",
@@ -899,6 +966,7 @@ def main() -> None:
             selector=selector,
             use_aten_lib=options.use_aten_lib,
             kernel_index=kernel_index,
+            manual_registration=options.manual_registration,
         )
         if custom_ops_native_functions:
             gen_custom_ops(

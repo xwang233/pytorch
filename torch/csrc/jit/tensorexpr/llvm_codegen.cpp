@@ -2,6 +2,7 @@
 
 #include <torch/csrc/jit/tensorexpr/llvm_codegen.h>
 
+#include <ATen/NativeFunctions.h>
 #include <ATen/Parallel.h>
 #include <c10/util/Exception.h>
 #include <c10/util/irange.h>
@@ -34,7 +35,11 @@
 #include <llvm/Passes/PassBuilder.h>
 #pragma GCC diagnostic pop
 
+#if LLVM_VERSION_MAJOR >= 18
+#include <llvm/TargetParser/Host.h>
+#else
 #include <llvm/Support/Host.h>
+#endif
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
 #include <llvm/Transforms/Scalar/DCE.h>
@@ -79,16 +84,16 @@ C10_DEFINE_bool(
 
 namespace torch::jit::tensorexpr {
 
-c10::optional<std::string>& LLVMTargetTriple() {
-  static c10::optional<std::string> triple = c10::nullopt;
+std::optional<std::string>& LLVMTargetTriple() {
+  static std::optional<std::string> triple = std::nullopt;
   return triple;
 }
-c10::optional<std::string>& LLVMTargetCPU() {
-  static c10::optional<std::string> cpu = c10::nullopt;
+std::optional<std::string>& LLVMTargetCPU() {
+  static std::optional<std::string> cpu = std::nullopt;
   return cpu;
 }
-c10::optional<std::string>& LLVMTargetAttrs() {
-  static c10::optional<std::string> attrs = c10::nullopt;
+std::optional<std::string>& LLVMTargetAttrs() {
+  static std::optional<std::string> attrs = std::nullopt;
   return attrs;
 }
 bool& LLVMAOTWorkflow() {
@@ -301,9 +306,9 @@ class LLVMCodeGenImpl : public IRVisitor {
       at::Device device,
       Dtype dtype,
       std::string kernel_func_name,
-      c10::optional<std::string> triple,
-      c10::optional<std::string> cpu,
-      c10::optional<std::string> attrs);
+      std::optional<std::string> triple,
+      std::optional<std::string> cpu,
+      std::optional<std::string> attrs);
   ~LLVMCodeGenImpl() = default;
 
   llvm::JITTargetAddress getKernelAddress() const;
@@ -392,9 +397,9 @@ LLVMCodeGen::LLVMCodeGen(
     at::Device device,
     const std::string& kernel_func_name,
     Dtype dtype,
-    c10::optional<std::string> triple,
-    c10::optional<std::string> cpu,
-    c10::optional<std::string> attrs)
+    std::optional<std::string> triple,
+    std::optional<std::string> cpu,
+    std::optional<std::string> attrs)
     : CodeGen(stmt, args, device, kernel_func_name) {
   impl_ = std::make_unique<LLVMCodeGenImpl>(
       this->stmt(),
@@ -441,10 +446,10 @@ void LLVMCodeGen::call(const std::vector<CallArg>& args) {
 at::Tensor LLVMCodeGen::empty_strided(
     c10::IntArrayRef size,
     c10::IntArrayRef stride,
-    c10::optional<c10::ScalarType> dtype_opt,
-    c10::optional<c10::Layout> layout_opt,
-    c10::optional<c10::Device> device_opt,
-    c10::optional<bool> pin_memory_opt) {
+    std::optional<c10::ScalarType> dtype_opt,
+    std::optional<c10::Layout> layout_opt,
+    std::optional<c10::Device> device_opt,
+    std::optional<bool> pin_memory_opt) {
   return at::native::empty_strided_cpu(
       size, stride, dtype_opt, layout_opt, device_opt, pin_memory_opt);
 }
@@ -484,16 +489,13 @@ LLVMCodeGenImpl::LLVMCodeGenImpl(
     at::Device device,
     Dtype dtype,
     std::string kernel_func_name,
-    c10::optional<std::string> triple,
-    c10::optional<std::string> cpu,
-    c10::optional<std::string> attrs)
+    std::optional<std::string> triple,
+    std::optional<std::string> cpu,
+    std::optional<std::string> attrs)
     : context_(std::make_unique<llvm::LLVMContext>()),
       irb_(getContext()),
       kernel_func_name_(std::move(kernel_func_name)),
       bufsExtAlloc_(ExternalAllocBufFinder::find(stmt)) {
-#if LLVM_VERSION_MAJOR >= 15
-  context_->setOpaquePointers(true);
-#endif
   if (!triple) {
     triple = LLVMTargetTriple();
   }
@@ -742,7 +744,9 @@ void LLVMCodeGenImpl::emitKernel(
       PM,
       asmStream,
       nullptr,
-#if LLVM_VERSION_MAJOR >= 10
+#if LLVM_VERSION_MAJOR >= 18
+      llvm::CodeGenFileType::AssemblyFile);
+#elif LLVM_VERSION_MAJOR >= 10
       llvm::CodeGenFileType::CGFT_AssemblyFile);
 #else
       llvm::TargetMachine::CodeGenFileType::CGFT_AssemblyFile);
@@ -1478,7 +1482,7 @@ void LLVMCodeGenImpl::visit(LoadPtr v) {
 TypedPointer LLVMCodeGenImpl::packFuncArgs(
     const std::vector<llvm::Value*>& func_args) {
   if (func_args.empty()) {
-    llvm::PointerType* VoidPtrType = llvm::Type::getInt8PtrTy(getContext());
+    llvm::PointerType* VoidPtrType = llvm::PointerType::getUnqual(getContext());
     return TypedPointer(
         VoidPtrType, llvm::ConstantPointerNull::get(VoidPtrType));
   }
@@ -2024,7 +2028,7 @@ void LLVMCodeGenImpl::visit(IntrinsicsPtr v) {
         SIMD_UNARY_MATH_CASE(kFloor, "floorf", FloatTy_)
         SIMD_UNARY_MATH_CASE(kCeil, "ceilf", FloatTy_)
         SIMD_UNARY_MATH_CASE(kTrunc, "truncf", FloatTy_)
-        SIMD_UNARY_MATH_CASE(kRound, "roundf", FloatTy_)
+        SIMD_UNARY_MATH_CASE(kRound, "nearbyint", FloatTy_)
         SIMD_UNARY_MATH_CASE(kErf, "erff", FloatTy_)
         SIMD_UNARY_MATH_CASE(kErfc, "erfcf", FloatTy_)
         SIMD_UNARY_MATH_CASE(kTan, "tanf", FloatTy_)
@@ -2082,7 +2086,7 @@ void LLVMCodeGenImpl::visit(IntrinsicsPtr v) {
       SIMD_UNARY_MATH_CASE(kFloor, "floor", DoubleTy_)
       SIMD_UNARY_MATH_CASE(kCeil, "ceil", DoubleTy_)
       SIMD_UNARY_MATH_CASE(kTrunc, "trunc", DoubleTy_)
-      SIMD_UNARY_MATH_CASE(kRound, "round", DoubleTy_)
+      SIMD_UNARY_MATH_CASE(kRound, "nearbyint", DoubleTy_)
       SIMD_UNARY_MATH_CASE(kErf, "erf", DoubleTy_)
       SIMD_UNARY_MATH_CASE(kErfc, "erfc", DoubleTy_)
       SIMD_UNARY_MATH_CASE(kTan, "tan", DoubleTy_)
@@ -2573,6 +2577,10 @@ void LLVMCodeGenImpl::visit(AllocatePtr v) {
     }
   }
 
+#if LLVM_VERSION_MAJOR > 17
+  llvm::Instruction* I = irb_.CreateMalloc(
+      LongTy_, dtypeToLLVM(v->dtype()), size, nullptr, nullptr, "");
+#else
   llvm::Instruction* I = llvm::CallInst::CreateMalloc(
       irb_.GetInsertBlock(),
       LongTy_,
@@ -2580,7 +2588,7 @@ void LLVMCodeGenImpl::visit(AllocatePtr v) {
       size,
       nullptr,
       nullptr);
-
+#endif
   // Insert the bitcast into the block.
   irb_.SetInsertPoint(irb_.GetInsertBlock());
   llvm::Value* malloc = irb_.Insert(I);
@@ -2607,7 +2615,11 @@ void LLVMCodeGenImpl::visit(FreePtr v) {
       : varToVal_.at(v->buffer_var());
 
   if (!llvm::isa<llvm::AllocaInst>(ptr)) {
+#if LLVM_VERSION_MAJOR > 17
+    irb_.Insert(irb_.CreateFree(ptr));
+#else
     irb_.Insert(llvm::CallInst::CreateFree(ptr, irb_.GetInsertBlock()));
+#endif
   }
 }
 
@@ -2742,7 +2754,11 @@ void LLVMCodeGenImpl::optimize(llvm::Module& M) {
   // options.
   llvm::PassBuilder PB(&TM);
 
+#if LLVM_VERSION_MAJOR >= 18
+  TM.registerPassBuilderCallbacks(PB, false /* PopulateClassToPassNames */);
+#else
   TM.registerPassBuilderCallbacks(PB);
+#endif
 
   // Register all the basic analyses with the managers.
   PB.registerModuleAnalyses(MAM);

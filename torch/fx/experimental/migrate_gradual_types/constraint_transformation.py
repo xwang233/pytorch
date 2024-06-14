@@ -75,7 +75,7 @@ def transform_index_select(constraint, counter):
     # if the index is valid then replace the input dimension with the new dimension
     # otherwise the dimension will not be replaced and the clause will contain False
     if is_valid_index == T():
-        new_dims = copy.deepcopy((dims))
+        new_dims = copy.deepcopy(dims)
         new_dims[constraint.index] = constraint.dim_replace
 
     transformed_constraint = Conj([BinConstraintT(constraint.input_var, TensorType(dims), op_eq),
@@ -403,7 +403,7 @@ def generate_calc_product(constraint, counter):
     for p in all_possibilities:
         p = list(p)
         # this tells us there is a dynamic variable
-        contains_dyn = not(all(constraint.op == op_neq for constraint in p))
+        contains_dyn = not all(constraint.op == op_neq for constraint in p)
         if contains_dyn:
             mid_var = [Dyn]
             total_constraints = lhs + mid_var + rhs
@@ -803,7 +803,7 @@ def apply_padding(e1_var: TVar,
         broadcast_padding = []
 
         # for every padding size, we also consider broadcasting
-        for j in range((len(d2) - i)):
+        for j in range(len(d2) - i):
             broadcast_padding.append(broadcast_dim(simulate_padding, d2, d11, d12, j, True))
 
         # we consider the possibilities for broadcasting for every dimension. Since we already
@@ -1017,7 +1017,7 @@ def gen_broadcasting_constraints(e1: TVar, e2: TVar, e11: TVar, e12: TVar, i: in
     """
     dims, counter = gen_lists_of_dims(4, i, counter)
     [d1, d2, d3, d4] = dims
-    nat_dims_i = gen_nat_constraints(list(itertools.chain(*dims)))
+    nat_dims_i = gen_nat_constraints(list(itertools.chain.from_iterable(dims)))
 
     initialize_tensors_constraints = create_equality_constraints_for_broadcasting(e1, e2, e11, e12,
                                                                                   d1, d2, d3, d4)

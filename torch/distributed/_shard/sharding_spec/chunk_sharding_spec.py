@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 from dataclasses import dataclass
 import torch
 import torch.distributed._shard.sharded_tensor.metadata as sharded_tensor_meta
@@ -9,7 +10,7 @@ from torch.distributed._shard.sharded_tensor.utils import (
 from torch.distributed._shard._utils import narrow_tensor
 import torch.distributed as dist
 import torch.distributed.distributed_c10d as distributed_c10d
-from typing import List, Union, TYPE_CHECKING
+from typing import cast, List, Optional, Union, TYPE_CHECKING
 from ._internals import (
     get_chunked_dim_size,
     get_split_size,
@@ -91,20 +92,17 @@ class ChunkShardingSpec(ShardingSpec):
         for idx, placement in enumerate(self.placements):
             # generate ShardMetadata for each placement device
             chunked_dim_size = get_chunked_dim_size(sharding_dim_size, split_size, idx)
-            if chunked_dim_size > 0:
-                shard_size = list(tensor_sizes)
-                current_offsets = [0] * tensor_num_dim
-                current_offsets[self.dim] = split_size * idx  # type: ignore[index]
-                shard_size[self.dim] = chunked_dim_size  # type: ignore[index]
+            shard_size = list(tensor_sizes)
+            current_offsets = [0] * tensor_num_dim
+            current_offsets[self.dim] = split_size * idx  # type: ignore[index]
+            shard_size[self.dim] = chunked_dim_size  # type: ignore[index]
 
-                shard_metadata = ShardMetadata(
-                    shard_offsets=current_offsets,
-                    shard_sizes=shard_size,
-                    placement=placement,
-                )
-                shards_metadata.append(shard_metadata)
-
-                # current_offsets[self.dim] += chunked_dim_size  # type: ignore[index]
+            shard_metadata = ShardMetadata(
+                shard_offsets=current_offsets,
+                shard_sizes=shard_size,
+                placement=placement,
+            )
+            shards_metadata.append(shard_metadata)
 
         return sharded_tensor_meta.ShardedTensorMetadata(
             shards_metadata,
@@ -132,11 +130,15 @@ class ChunkShardingSpec(ShardingSpec):
             pin_memory=tensor.is_pinned()
         )
         current_rank = dist.get_rank(process_group)
+        current_global_rank = dist.get_rank()
         tensor_meta = self.build_metadata(tensor.size(), tensor_properties)
         local_shards = []
         local_tensor = None
         local_metadata = None
-        tensors_to_scatter = [None] * dist.get_world_size(process_group)
+        tensors_to_scatter = cast(
+            List[Optional[torch.Tensor]],
+            [None] * dist.get_world_size(process_group),
+        )
 
         sharding_dim_size = tensor.size()[self.dim]  # type: ignore[index]
         chunks = len(self.placements)
@@ -145,7 +147,7 @@ class ChunkShardingSpec(ShardingSpec):
         scatter_shape[self.dim] = split_size  # type: ignore[index]
 
         for shard_meta in tensor_meta.shards_metadata:
-            rank, device = _parse_and_validate_remote_device(process_group, shard_meta.placement)
+            remote_global_rank, device = _parse_and_validate_remote_device(process_group, shard_meta.placement)
             if current_rank == src_rank:
                 # Reshape to get shard for this rank and we don't want autograd
                 # recording here for the narrow op and 'local_shard' should be a
@@ -160,9 +162,11 @@ class ChunkShardingSpec(ShardingSpec):
                 else:
                     tensor_to_scatter = narrowed_tensor.detach().clone().contiguous()
 
-                tensors_to_scatter[rank] = tensor_to_scatter
+                tensors_to_scatter[
+                    dist.get_group_rank(process_group, remote_global_rank)
+                ] = tensor_to_scatter
 
-            if current_rank == rank:
+            if current_global_rank == remote_global_rank:
                 local_tensor = torch.empty(
                     scatter_shape, dtype=tensor.dtype, layout=tensor.layout, device=device)
                 local_metadata = shard_meta

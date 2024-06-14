@@ -40,7 +40,7 @@ class Location:
     line: int
 
     def __str__(self) -> str:
-        return "{}:{}".format(self.file, self.line)
+        return f"{self.file}:{self.line}"
 
 
 # Valid values of the 'variants' field in native_functions.yaml
@@ -53,8 +53,15 @@ class Variant(Enum):
 DEFAULT_KERNEL_NAMESPACE = "at::native"
 
 # NOTE: Keep the list in sync with `DispatchKey` in c10/core/DispatchKey.h
-BACKEND_COMPONENTS = "CPU CUDA HIP XLA MPS IPU XPU HPU VE Lazy Meta PrivateUse1 PrivateUse2 PrivateUse3".split()
-FUNCTIONALITY_KEYS = ["", "Quantized", "Sparse", "NestedTensor", "Autograd"]
+BACKEND_COMPONENTS = "CPU CUDA HIP XLA MTIA MPS IPU XPU HPU VE Lazy Meta PrivateUse1 PrivateUse2 PrivateUse3".split()
+FUNCTIONALITY_KEYS = [
+    "",
+    "Quantized",
+    "Sparse",
+    "SparseCsr",
+    "NestedTensor",
+    "Autograd",
+]
 
 # This list guards dispatches that can be used in derivatives.yaml
 # For now we omit AutogradFunctionality and AutogradOther
@@ -72,7 +79,7 @@ class DispatchKey(Enum):
     CatchAll = Undefined
 
     FPGA = auto()
-    ORT = auto()
+    MAIA = auto()
     Vulkan = auto()
     Metal = auto()
     MKLDNN = auto()
@@ -82,12 +89,18 @@ class DispatchKey(Enum):
     CustomRNGKeyId = auto()
     MkldnnCPU = auto()
     Sparse = auto()
-    SparseCsrCPU = auto()
-    SparseCsrCUDA = auto()
+    SparseCsr = auto()
+    NestedTensor = auto()
+    Dense = auto()
 
+    PythonTLSSnapshot = auto()
+    PreDispatch = auto()
+    PythonDispatcher = auto()
     Python = auto()
     FuncTorchDynamicLayerBackMode = auto()
     ZeroTensor = auto()
+    Conjugate = auto()
+    Negative = auto()
     BackendSelect = auto()
     Named = auto()
     AutogradOther = auto()
@@ -95,10 +108,13 @@ class DispatchKey(Enum):
     AutogradNestedTensor = auto()
     Tracer = auto()
     Autocast = auto()
+    AutocastCPU = auto()
+    AutocastCUDA = auto()
     Batched = auto()
     VmapMode = auto()
     FuncTorchGradWrapper = auto()
     FuncTorchBatched = auto()
+    BatchedNestedTensor = auto()
     FuncTorchVmapMode = auto()
     FuncTorchDynamicLayerFrontMode = auto()
     Functionalize = auto()
@@ -118,6 +134,7 @@ class DispatchKey(Enum):
     CUDA = auto()
     HIP = auto()
     XLA = auto()
+    MTIA = auto()
     MPS = auto()
     IPU = auto()
     XPU = auto()
@@ -132,6 +149,7 @@ class DispatchKey(Enum):
     QuantizedCUDA = auto()
     QuantizedHIP = auto()
     QuantizedXLA = auto()
+    QuantizedMTIA = auto()
     QuantizedMPS = auto()
     QuantizedIPU = auto()
     QuantizedXPU = auto()
@@ -146,6 +164,7 @@ class DispatchKey(Enum):
     SparseCUDA = auto()
     SparseHIP = auto()
     SparseXLA = auto()
+    SparseMTIA = auto()
     SparseMPS = auto()
     SparseIPU = auto()
     SparseXPU = auto()
@@ -156,10 +175,26 @@ class DispatchKey(Enum):
     SparsePrivateUse1 = auto()
     SparsePrivateUse2 = auto()
     SparsePrivateUse3 = auto()
+    SparseCsrCPU = auto()
+    SparseCsrCUDA = auto()
+    SparseCsrHIP = auto()
+    SparseCsrXLA = auto()
+    SparseCsrMTIA = auto()
+    SparseCsrMPS = auto()
+    SparseCsrIPU = auto()
+    SparseCsrXPU = auto()
+    SparseCsrHPU = auto()
+    SparseCsrVE = auto()
+    SparseCsrLazy = auto()
+    SparseCsrMeta = auto()
+    SparseCsrPrivateUse1 = auto()
+    SparseCsrPrivateUse2 = auto()
+    SparseCsrPrivateUse3 = auto()
     NestedTensorCPU = auto()
     NestedTensorCUDA = auto()
     NestedTensorHIP = auto()
     NestedTensorXLA = auto()
+    NestedTensorMTIA = auto()
     NestedTensorMPS = auto()
     NestedTensorIPU = auto()
     NestedTensorXPU = auto()
@@ -174,6 +209,7 @@ class DispatchKey(Enum):
     AutogradCUDA = auto()
     AutogradHIP = auto()
     AutogradXLA = auto()
+    AutogradMTIA = auto()
     AutogradMPS = auto()
     AutogradIPU = auto()
     AutogradXPU = auto()
@@ -198,6 +234,12 @@ class DispatchKey(Enum):
             if k == value:
                 return v
         raise AssertionError(f"unknown dispatch key {value}")
+
+
+class _TorchDispatchModeKey(Enum):
+    FAKE = auto()
+    PROXY = auto()
+    FUNCTIONAL = auto()
 
 
 def codegen_per_backend_entries() -> str:
@@ -243,6 +285,7 @@ dispatch_keys = [
     # kernels
     DispatchKey.Meta,
     DispatchKey.SparseMeta,
+    DispatchKey.SparseCsrMeta,
     DispatchKey.QuantizedMeta,
     DispatchKey.NestedTensorMeta,
     DispatchKey.ZeroTensor,
@@ -298,6 +341,10 @@ class ScalarType(Enum):
     ComplexDouble = auto()
     Bool = auto()
     BFloat16 = auto()
+    Float8_e5m2 = auto()
+    Float8_e5m2fnuz = auto()
+    Float8_e4m3fn = auto()
+    Float8_e4m3fnuz = auto()
 
     def __str__(self) -> str:
         return self.name
@@ -579,6 +626,9 @@ class NativeFunction:
         assert device_check_s is None or isinstance(
             device_check_s, str
         ), f"not a str: {device_check_s}"
+        assert (
+            device_check_s is None or device_check_s in DeviceCheckType.__members__
+        ), f"illegal device_check: {device_check_s}"
         device_check: DeviceCheckType
         if device_check_s is None:
             device_check = DeviceCheckType.ExactSame
@@ -631,6 +681,10 @@ class NativeFunction:
             tags_inp = [tags_inp]
         assert isinstance(tags_inp, list)
 
+        # All aten ops generated by torchgen receive the pt2_compliant tag.
+        if namespace == "aten" and "pt2_compliant_tag" in valid_tags:
+            tags_inp.append("pt2_compliant_tag")
+
         tags: Set[str] = set()
         for t in tags_inp:
             assert len(valid_tags) > 0
@@ -655,7 +709,12 @@ class NativeFunction:
             for ks, v in raw_dispatch.items():
                 if ks == "__line__":
                     continue  # not worth tracking line numbers for dispatch entries
-                assert isinstance(ks, str), e
+                assert isinstance(
+                    ks, str
+                ), f"illegal dispatch key '{ks}' in {raw_dispatch}"
+                assert isinstance(
+                    v, str
+                ), f"illegal dispatch value '{v}' in {raw_dispatch}"
                 for k in ks.split(","):
                     dispatch_key = DispatchKey.parse(k.strip())
                     num_dispatch_keys += 1
@@ -814,16 +873,16 @@ class NativeFunction:
             )
 
         has_composite_implicit_autograd_kernel = (
-            DispatchKey.CompositeImplicitAutograd in dispatch.keys()
+            DispatchKey.CompositeImplicitAutograd in dispatch
         )
         has_composite_implicit_autograd_nested_tensor_kernel = (
-            DispatchKey.CompositeImplicitAutogradNestedTensor in dispatch.keys()
+            DispatchKey.CompositeImplicitAutogradNestedTensor in dispatch
         )
         has_composite_explicit_autograd_kernel = (
-            DispatchKey.CompositeExplicitAutograd in dispatch.keys()
+            DispatchKey.CompositeExplicitAutograd in dispatch
         )
         has_composite_explicit_autograd_non_functional_kernel = (
-            DispatchKey.CompositeExplicitAutogradNonFunctional in dispatch.keys()
+            DispatchKey.CompositeExplicitAutogradNonFunctional in dispatch
         )
 
         # We aren't going to store dispatch metadata inline in NativeFunctions;
@@ -1312,6 +1371,17 @@ class FunctionSchema:
     # TODO: Need to handle collisions with argument names at some point
     returns: Tuple["Return", ...]
 
+    @property
+    def is_mutable(self) -> bool:
+        def is_write(arg: "Argument") -> bool:
+            if arg.annotation is None:
+                return False
+            return arg.annotation.is_write
+
+        # Corresponds to torch._C._FunctionSchema.is_mutable
+        # See aten/src/ATen/core/function_schema.h (keep these in sync)
+        return any(is_write(a) for a in self.arguments.flat_all)
+
     def schema_order_arguments(self) -> Iterator["Argument"]:
         return itertools.chain(
             self.arguments.flat_positional,
@@ -1396,7 +1466,7 @@ class FunctionSchema:
                 ), "out= ops that accept tensor lists as out arguments "
                 "are expected to have no return type (since you can't do method chaining on them)"
             else:
-                # mutable keyward arguments whose name has _scratch_ prefix are
+                # mutable keyword arguments whose name has _scratch_ prefix are
                 # scratch tensors for memory planning and should not be returned
                 assert len(
                     [
@@ -1429,7 +1499,7 @@ class FunctionSchema:
 
         if self.arguments.tensor_options is not None:
             assert self.kind() == SchemaKind.functional, (
-                "Found an operator that is not functional or out varuabt, but has tensor options arguments."
+                "Found an operator that is not functional or out variant, but has tensor options arguments."
                 "This is not allowed- tensor options arguments are only allowed for factory functions."
                 f"schema: {str(self)}"
             )
@@ -1588,8 +1658,11 @@ class FunctionSchema:
             )
 
         base_name = self.name.name.base
-        if strip_view_copy_name and base_name.endswith("_copy"):
-            base_name = base_name.replace("_copy", "")
+        if strip_view_copy_name:
+            if base_name.endswith("_copy"):
+                base_name = base_name.replace("_copy", "")
+            elif base_name.endswith("_scatter"):
+                base_name = base_name.replace("scatter", "inverse")
 
         # find mutable inputs that are not originally returned, and convert them to returns
         returns_from_mutable_inputs = tuple(
@@ -1796,6 +1869,7 @@ class BaseTy(Enum):
     bool = auto()
     Layout = auto()
     Device = auto()
+    DeviceIndex = auto()
     Scalar = auto()
     MemoryFormat = auto()
     QScheme = auto()
@@ -1932,12 +2006,20 @@ class Argument:
     # model will have to change!
     annotation: Optional[Annotation]
 
+    @property
+    def alias_info(self) -> Optional[Annotation]:
+        return self.annotation
+
     @staticmethod
     def parse(arg: str) -> "Argument":
         name: str
         default: Optional[str]
+        assert " " in arg, f"illegal argument '{arg}'"
         type_and_annot, name_and_default = arg.rsplit(" ", 1)
         if "=" in name_and_default:
+            assert (
+                name_and_default.count("=") == 1
+            ), f"illegal argument with default value: '{name_and_default}'"
             name, default = name_and_default.split("=")
         else:
             name = name_and_default
@@ -1990,6 +2072,10 @@ class Return:
     name: Optional[str]
     type: Type
     annotation: Optional[Annotation]
+
+    @property
+    def alias_info(self) -> Optional[Annotation]:
+        return self.annotation
 
     @staticmethod
     def parse(arg: str) -> "Return":
@@ -2190,7 +2276,7 @@ class Arguments:
             post_self_positional=tuple(
                 map(strip_arg_annotation, self.post_self_positional)
             ),
-            # Since TensorOptions are droped, the post_tensor_options_kwargs are
+            # Since TensorOptions are dropped, the post_tensor_options_kwargs are
             # converted to pre_tensor_options_kwargs
             pre_tensor_options_kwarg_only=tuple(
                 map(strip_arg_annotation, self.pre_tensor_options_kwarg_only)
@@ -2577,9 +2663,9 @@ class NativeFunctionsViewGroup:
                 " See Note [view_copy NativeFunctions] for details."
             )
         else:
-            assert self.view_copy.func.name.name.base.endswith("_copy")
+            assert self.view_copy.func.name.name.base.endswith(("_copy", "_scatter"))
             assert self.view.func.signature() == self.view_copy.func.signature(
-                strip_view_copy_name=True
+                strip_view_copy_name=True,
             )
             assert "view_copy" in self.view_copy.tags, (
                 f"{str(self.view_copy.func.name), str(self.view.tags)} appears to be a view_copy operator. The codegen expects"
@@ -2632,6 +2718,13 @@ def gets_generated_view_copy(f: NativeFunction) -> bool:
         return False
     # We also don't need to generate copy variants for inplace views.
     if "inplace_view" in f.tags:
+        return False
+    # Assume ops ending in _inverse have manually-defined copy variants
+    # (e.g. slice_inverse() has the copy variant slice_scatter()).
+    # We -could- probably generate these as well, but the codegen will be
+    # slightly different, and hand-writing these few kernels keeps codegen
+    # complexity lower.
+    if f.func.name.name.base.endswith("_inverse"):
         return False
     return True
 
@@ -2711,6 +2804,9 @@ class Precompute:
             )
 
             arg, with_list_raw = raw_replace_item.split(" -> ")
+            assert (
+                " " not in arg
+            ), f"illegal kernel param name '{arg}' in precomputed parameters'"
             with_list = with_list_raw.split(",")
             with_list_args = [Argument.parse(name.strip()) for name in with_list]
             replace[arg] = with_list_args

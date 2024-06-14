@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 import abc
 import copy
 from collections import defaultdict
@@ -201,8 +202,7 @@ class BaseSparsifier(abc.ABC):
                         )
                         # info_from_tensor_fqn will chop leading '.' from tensor_fqn so ignore that
                     ), (
-                        "Given both `{}` and `tensor_fqn` in the config, it is expected them to "
-                        "agree!".format(key)
+                        f"Given both `{key}` and `tensor_fqn` in the config, it is expected them to agree!"
                     )
             local_args.update(info_from_tensor_fqn)
             self.groups.append(local_args)

@@ -14,8 +14,7 @@ C10_DEFINE_bool(
     true,
     "If on, static runtime or optimize_sparse_nn_model will fuse clip ranges gather ops.");
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 bool graphHasOp(std::shared_ptr<Graph>& graph, const char* op_name) {
   DepthFirstGraphNodeIterator graph_it(graph);
@@ -210,14 +209,14 @@ C10_UNUSED void ClipRangesGather(std::shared_ptr<torch::jit::Graph>& graph) {
 C10_UNUSED void PrecomputeMultiplierShiftForSigridHash(
     std::shared_ptr<torch::jit::Graph>& graph) {
   std::string pattern = R"IR(
-    graph(%a, %b, %c, %d):
-        %y0 : Tensor = fb::sigrid_hash(%a, %b, %c, %d)
+    graph(%a, %b, %c, %d, %e):
+        %y0 : Tensor = fb::sigrid_hash(%a, %b, %c, %d, %e)
         return (%y0)
   )IR";
   std::string split_pattern = R"IR(
-    graph(%a, %b, %c, %d):
+    graph(%a, %b, %c, %d, %e):
         %y0 : Tensor = fb::sigrid_hash_compute_multipler_shift(%c)
-        %y2 : Tensor = fb::sigrid_hash_precompute(%a, %b, %c, %y0, %d)
+        %y2 : Tensor = fb::sigrid_hash_precompute(%a, %b, %c, %y0, %d, %e)
         return (%y2)
   )IR";
   SubgraphRewriter fuse;
@@ -1348,7 +1347,8 @@ bool isNoOpSlice(Node* node) {
 void EliminateNoOpSlice(std::shared_ptr<Graph>& graph) {
   DepthFirstGraphNodeIterator it(graph);
   auto schema = torch::schema(
-      "aten::slice.t(t[] l, int? start=None, int? end=None, int step=1) -> t[]");
+      "aten::slice.t(t[] l, int? start=None, int? end=None, int step=1) -> t[]",
+      /*allow_typevars*/ true);
   Node* node = nullptr;
   std::vector<Node*> to_delete;
   while ((node = it.next()) != nullptr) {
@@ -1454,5 +1454,4 @@ void PrepackWeights(std::shared_ptr<Graph>& graph) {
   // Constant propagation should be called after this pass + others.
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

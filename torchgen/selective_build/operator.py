@@ -61,7 +61,7 @@ class SelectiveBuildOperator:
         }
 
         if len(set(op_info.keys()) - allowed_keys) > 0:
-            raise Exception(
+            raise Exception(  # noqa: TRY002
                 "Got unexpected top level keys: {}".format(
                     ",".join(set(op_info.keys()) - allowed_keys),
                 )
@@ -83,7 +83,7 @@ class SelectiveBuildOperator:
         if "debug_info" in op_info:
             di_list = op_info["debug_info"]
             assert isinstance(di_list, list)
-            debug_info = tuple((str(x) for x in di_list))
+            debug_info = tuple(str(x) for x in di_list)
 
         return SelectiveBuildOperator(
             name=op_name,
@@ -132,11 +132,8 @@ def combine_operators(
     lhs: "SelectiveBuildOperator", rhs: "SelectiveBuildOperator"
 ) -> "SelectiveBuildOperator":
     if str(lhs.name) != str(rhs.name):
-        raise Exception(
-            "Expected both arguments to have the same name, but got '{}' and '{}' instead".format(
-                str(lhs.name),
-                str(rhs.name),
-            )
+        raise Exception(  # noqa: TRY002
+            f"Expected both arguments to have the same name, but got '{str(lhs.name)}' and '{str(rhs.name)}' instead"
         )
 
     return SelectiveBuildOperator(

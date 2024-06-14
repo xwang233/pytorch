@@ -9,7 +9,7 @@
 #include <ATen/functorch/BatchedFallback.h>
 #include <ATen/core/dispatch/Dispatcher.h>
 
-namespace at { namespace functorch {
+namespace at::functorch {
 // Flattens out all dims except the batch dim, and also moves batch dim
 // (if it exists) to front.
 static at::Tensor flatten_logical(const Tensor& tensor, optional<int64_t> bdim) {
@@ -98,12 +98,8 @@ static Tensor binary_cross_entropy_plumbing(
     return at::binary_cross_entropy(self, target, weight, reduction);
   }
 
-  Tensor self_value;
-  optional<int64_t> self_bdim;
-  std::tie(self_value, self_bdim) = unwrapTensorAtLevel(self, cur_level);
-  Tensor target_value;
-  optional<int64_t> target_bdim;
-  std::tie(target_value, target_bdim) = unwrapTensorAtLevel(target, cur_level);
+  auto [self_value, self_bdim] = unwrapTensorAtLevel(self, cur_level);
+  auto [target_value, target_bdim] = unwrapTensorAtLevel(target, cur_level);
 
   Tensor result;
   if (self_bdim || target_bdim) {
@@ -127,7 +123,7 @@ static Tensor binary_cross_entropy_plumbing(
 
 static Tensor binary_cross_entropy_backward_plumbing(
     const Tensor& grad, const Tensor& input, const Tensor& target,
-    const c10::optional<Tensor>& weight_opt, int64_t reduction) {
+    const std::optional<Tensor>& weight_opt, int64_t reduction) {
   auto maybe_layer = maybeCurrentDynamicLayer();
   vmap_check_escaped(maybe_layer, "binary_cross_entropy_backward_plumbing");
   int64_t cur_level = maybe_layer->layerId();
@@ -137,16 +133,10 @@ static Tensor binary_cross_entropy_backward_plumbing(
     return at::binary_cross_entropy_backward(grad, input, target, weight_opt, reduction);
   }
 
-  Tensor grad_value;
-  optional<int64_t> grad_bdim;
-  std::tie(grad_value, grad_bdim) = unwrapTensorAtLevel(
+  auto [grad_value, grad_bdim] = unwrapTensorAtLevel(
       reduction == Reduction::None ? grad : grad.expand_as(input), cur_level);
-  Tensor input_value;
-  optional<int64_t> input_bdim;
-  std::tie(input_value, input_bdim) = unwrapTensorAtLevel(input, cur_level);
-  Tensor target_value;
-  optional<int64_t> target_bdim;
-  std::tie(target_value, target_bdim) = unwrapTensorAtLevel(target, cur_level);
+  auto [input_value, input_bdim] = unwrapTensorAtLevel(input, cur_level);
+  auto [target_value, target_bdim] = unwrapTensorAtLevel(target, cur_level);
 
   Tensor grad_input;
   if (grad_bdim || input_bdim || target_bdim) {
@@ -179,138 +169,7 @@ static Tensor binary_cross_entropy_backward_plumbing(
   return grad_input;
 }
 
-static std::tuple<Tensor, Tensor> nll_loss_forward_decomposition(
-    const Tensor & self,
-    const Tensor & target,
-    const c10::optional<Tensor> & weight,
-    int64_t reduction, int64_t ignore_index) {
-
-  // self can be [N, C, ...] or [C]
-  // target can be [N, ...] or []
-
-  int64_t channel_dim = 1;
-  if (self.dim() < 2) {
-    channel_dim = 0;
-  }
-  auto self_ = self;
-  Tensor weight_;
-
-  if (weight && weight->defined()) {
-    // Here is a specific case with reduction mean and non-batched tensors
-    // https://github.com/pytorch/pytorch/issues/61309
-    // In this case weight is cancelled: w * x[t] / w -> x[t]
-    if (!(reduction == Reduction::Mean && self_.dim() < 2)) {
-      // reshape weights to [1, C, 1, ..., 1]
-      auto shape = weight->sizes();
-      VmapDimVector new_shape(self_.dim(), 1);
-      new_shape[channel_dim] = shape[0];
-      weight_ = weight->reshape(new_shape);
-      self_ = self_ * weight_;
-    }
-  }
-  auto target_ = target.unsqueeze(channel_dim);
-  // target can be [N, 1, ...] or [1]
-
-  auto result = -at::gather(self_, channel_dim, target_).squeeze(channel_dim);
-  auto total_weight = at::full(
-      {}, result.numel(), self_.scalar_type(),
-      self_.layout(), self_.device(), nullopt);
-
-  bool has_ignore_index = ignore_index >= 0;
-  Tensor ignore_index_mask;
-  if (has_ignore_index) {
-    ignore_index_mask = target != ignore_index;
-    result = result * ignore_index_mask;
-    total_weight = ignore_index_mask.sum().to(self_);
-  }
-
-  // Apply the reduction
-  if (result.dim() > 0) {
-    if (reduction == Reduction::Sum) {
-      result = result.sum();
-    } else if (reduction == Reduction::Mean) {
-      if (!weight || !weight->defined()) {
-        if (has_ignore_index) {
-          TORCH_INTERNAL_ASSERT(ignore_index_mask.defined());
-          // total_weight is ignore_index_mask.sum()
-          result = result.sum() / total_weight;
-        } else {
-          result = result.mean();
-        }
-      } else {
-        TORCH_INTERNAL_ASSERT(weight_.defined());
-        weight_ = weight_.expand(self_.sizes());
-        auto wsum = at::gather(weight_, channel_dim, target_).squeeze(channel_dim);
-        if (has_ignore_index) {
-          TORCH_INTERNAL_ASSERT(ignore_index_mask.defined());
-          wsum = wsum * ignore_index_mask;
-        }
-        wsum = wsum.sum();
-        result = result.sum() / wsum;
-        total_weight = wsum;
-      }
-    }
-  } else if (reduction == Reduction::Mean && weight && weight->defined()) {
-    // here weight is [C] and target is [1]
-    auto wsum = at::gather(*weight, channel_dim, target_).squeeze(channel_dim);
-    if (has_ignore_index) {
-      TORCH_INTERNAL_ASSERT(ignore_index_mask.defined());
-      wsum = wsum * ignore_index_mask;
-    }
-    total_weight = wsum.sum();
-  }
-
-  return std::make_tuple(result, total_weight);
-}
-
-static at::Tensor nll_loss_backward_decomposition(
-    const at::Tensor & grad_output, const at::Tensor & self,
-    const at::Tensor & target, const c10::optional<at::Tensor> & weight,
-    int64_t reduction, int64_t ignore_index, const at::Tensor & total_weight) {
-
-  int64_t channel_dim = 1;
-  if (self.dim() < 2) {
-    channel_dim = 0;
-  }
-  auto target_ = target.unsqueeze(channel_dim);
-
-  auto grad_output_ = grad_output;
-  if (reduction == Reduction::Mean) {
-    grad_output_ = grad_output_ / total_weight;
-  }
-
-  auto grad_input = at::zeros_like(self);
-  grad_input = at::scatter(grad_input, channel_dim, target_, -1.0);
-
-  if (grad_output_.dim() < grad_input.dim() && grad_output_.dim() > 0) {
-    grad_output_ = grad_output_.unsqueeze(channel_dim);
-  }
-
-  Tensor weight_;
-  if (weight && weight->defined()) {
-    const auto& self_ = self;
-    auto shape = weight->sizes();
-    VmapDimVector new_shape(self_.dim(), 1);
-    new_shape[channel_dim] = shape[0];
-    weight_ = weight->reshape(new_shape);
-    grad_output_ = grad_output_ * weight_;
-  }
-
-  bool has_ignore_index = ignore_index >= 0;
-  Tensor ignore_index_mask;
-  if (has_ignore_index) {
-    ignore_index_mask = target_ != ignore_index;
-    grad_output_ = grad_output_ * ignore_index_mask;
-  }
-
-  return grad_input * grad_output_;
-}
-
 TORCH_LIBRARY_IMPL(aten, FuncTorchBatched, m) {
-  m.impl("nll_loss_forward", nll_loss_forward_decomposition);
-  m.impl("nll_loss2d_forward", nll_loss_forward_decomposition);
-  m.impl("nll_loss_backward", nll_loss_backward_decomposition);
-  m.impl("nll_loss2d_backward", nll_loss_backward_decomposition);
   VMAP_SUPPORT(mse_loss, mse_loss_batch_rule);
   // mse_loss_backward uses a decomposition for its batch rule
   VMAP_SUPPORT(huber_loss, huber_loss_batch_rule);
@@ -321,4 +180,4 @@ TORCH_LIBRARY_IMPL(aten, FuncTorchBatched, m) {
   m.impl("binary_cross_entropy_backward", binary_cross_entropy_backward_plumbing);
 }
 
-}}
+} // namespace at::functorch

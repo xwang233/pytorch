@@ -1,13 +1,14 @@
+# mypy: allow-untyped-defs
 from typing import Optional, Tuple
 
 import torch
 import torch.utils._pytree as pytree
 from torch import _prims
 from torch._C import DispatchKey
+from torch._higher_order_ops.utils import autograd_not_implemented
 from torch._ops import HigherOrderOperator
 
 from torch._prims_common import CUDARngStateHelper, make_contiguous_strides_for
-from torch._prims_common.wrappers import backwards_not_supported
 from torch._subclasses.fake_tensor import FakeTensorMode
 from torch.fx.experimental.proxy_tensor import (
     disable_proxy_modes_tracing,
@@ -15,19 +16,6 @@ from torch.fx.experimental.proxy_tensor import (
     track_tensor_tree,
 )
 from torch.types import _device, _dtype
-from torch.utils._python_dispatch import (
-    _get_current_dispatch_mode,
-    _pop_mode_temporarily,
-)
-
-
-rngprim_namespace = "rngprims"
-rngprim = torch.library.Library(rngprim_namespace, "DEF")
-rngprim_impl = torch.library.Library(
-    rngprim_namespace, "IMPL", "CompositeExplicitAutograd"
-)
-rngprim_autograd_impl = torch.library.Library(rngprim_namespace, "IMPL", "Autograd")
-rngprim_meta_impl = torch.library.Library(rngprim_namespace, "IMPL", "Meta")
 
 
 def throw_on_non_cuda(device):
@@ -39,22 +27,21 @@ def throw_on_non_cuda(device):
 
 
 def register_rng_prim(name, schema, impl_aten, impl_meta, doc, tags=None):
-    rngprim.define(schema)
-    rngprim_impl.impl(name, impl_aten)
-    rngprim_meta_impl.impl(name, impl_meta)
+    rngprim_def = torch.library.custom_op(
+        "rngprims::" + name, impl_aten, mutates_args=(), schema=schema
+    )
+    rngprim_def.register_fake(impl_meta)
 
     prim_packet = getattr(torch._ops.ops.rngprims, name)
     prim = prim_packet.default
     if tags:
         prim._tags = tags
 
-    rngprim_autograd_impl.impl(name, backwards_not_supported(prim))
-
     for p in (prim_packet, prim):
         p.__doc__ = doc
         p.return_type = torch._prims_common.RETURN_TYPE.NEW  # type: ignore[attr-defined]
 
-        p.schema = schema
+        p.schema = name + schema
         p.impl_aten = impl_aten
         p.prim_meta_impl = impl_meta
 
@@ -93,7 +80,7 @@ def philox_rand_offset(
 
 def register_philox_rand():
     name = "philox_rand"
-    schema = "philox_rand(SymInt[] size, Tensor seed, Tensor offset, int[]? stride, Device? device=None, ScalarType? dtype=None) -> (Tensor, Tensor)"  # noqa: B950
+    schema = "(SymInt[] size, Tensor seed, Tensor offset, int[]? stride, Device? device=None, ScalarType? dtype=None) -> (Tensor, Tensor)"  # noqa: B950
 
     def _philox_rand_meta(
         shape: torch.Size,
@@ -142,7 +129,7 @@ def register_philox_rand():
         impl_aten=_philox_rand,
         impl_meta=_philox_rand_meta,
         doc="Philox based stateless rand operator",
-        tags=(torch.Tag.nondeterministic_seeded,),  # type: ignore[attr-defined]
+        tags=(torch.Tag.nondeterministic_seeded,),
     )
 
 
@@ -164,14 +151,9 @@ def get_device(args, kwargs):
 def register_run_and_save_rng_state_op():
     run_and_save_rng_state = HigherOrderOperator("run_and_save_rng_state")
 
-    run_and_save_rng_state.fallthrough(DispatchKey.ADInplaceOrView)
-    run_and_save_rng_state.fallthrough(DispatchKey.PythonDispatcher)  # type: ignore[attr-defined]
-    run_and_save_rng_state.fallthrough(DispatchKey.PythonTLSSnapshot)  # type: ignore[attr-defined]
-
-    @run_and_save_rng_state.py_impl(DispatchKey.Autograd)
-    def impl_autograd(op, *args, **kwargs):
-        with torch._C._AutoDispatchBelowAutograd():
-            return run_and_save_rng_state(op, *args, **kwargs)
+    run_and_save_rng_state.py_impl(DispatchKey.Autograd)(
+        autograd_not_implemented(run_and_save_rng_state, deferred_error=True)
+    )
 
     @run_and_save_rng_state.py_impl(DispatchKey.CUDA)
     def impl_cuda(op, *args, **kwargs):
@@ -190,27 +172,23 @@ def register_run_and_save_rng_state_op():
         return impl(op, *args, **kwargs)
 
     @run_and_save_rng_state.py_impl(FakeTensorMode)
-    def impl_fake_tensor_mode(op, *args, **kwargs):
+    def impl_fake_tensor_mode(mode, op, *args, **kwargs):
         # Check device to call the right impl
-        return impl_backend_select(op, *args, **kwargs)
+        with mode:
+            return impl_backend_select(op, *args, **kwargs)
 
     @run_and_save_rng_state.py_impl(ProxyTorchDispatchMode)
-    def impl_proxy_dispatch_mode(op, *args, **kwargs):
-        mode = _get_current_dispatch_mode()
-        assert mode is not None
-        with _pop_mode_temporarily() as mode:
-            if mode.enable_tracing:
-                out = impl_fake_tensor_mode(op, *args, **kwargs)
-                proxy_args = pytree.tree_map(mode.tracer.unwrap_proxy, (op, *args))
-                proxy_kwargs = pytree.tree_map(mode.tracer.unwrap_proxy, kwargs)
-                out_proxy = mode.tracer.create_proxy(
-                    "call_function", run_and_save_rng_state, proxy_args, proxy_kwargs
-                )
-                return track_tensor_tree(
-                    out, out_proxy, constant=None, tracer=mode.tracer
-                )
-            else:
-                return run_and_save_rng_state(op, *args, **kwargs)
+    def impl_proxy_dispatch_mode(mode, op, *args, **kwargs):
+        if mode.enable_tracing:
+            out = impl_backend_select(op, *args, **kwargs)
+            proxy_args = pytree.tree_map(mode.tracer.unwrap_proxy, (op, *args))
+            proxy_kwargs = pytree.tree_map(mode.tracer.unwrap_proxy, kwargs)
+            out_proxy = mode.tracer.create_proxy(
+                "call_function", run_and_save_rng_state, proxy_args, proxy_kwargs
+            )
+            return track_tensor_tree(out, out_proxy, constant=None, tracer=mode.tracer)
+        else:
+            return run_and_save_rng_state(op, *args, **kwargs)
 
     return run_and_save_rng_state
 
@@ -218,14 +196,9 @@ def register_run_and_save_rng_state_op():
 def register_run_with_rng_state_op():
     run_with_rng_state = HigherOrderOperator("run_with_rng_state")
 
-    run_with_rng_state.fallthrough(DispatchKey.ADInplaceOrView)
-    run_with_rng_state.fallthrough(DispatchKey.PythonTLSSnapshot)  # type: ignore[attr-defined]
-    run_with_rng_state.fallthrough(DispatchKey.PythonDispatcher)  # type: ignore[attr-defined]
-
-    @run_with_rng_state.py_impl(DispatchKey.Autograd)
-    def impl_autograd(rng_state, op, *args, **kwargs):
-        with torch._C._AutoDispatchBelowAutograd():
-            return run_with_rng_state(rng_state, op, *args, **kwargs)
+    run_with_rng_state.py_impl(DispatchKey.Autograd)(
+        autograd_not_implemented(run_with_rng_state, deferred_error=True)
+    )
 
     @run_with_rng_state.py_impl(DispatchKey.CUDA)
     def impl_cuda(rng_state, op, *args, **kwargs):
@@ -244,25 +217,20 @@ def register_run_with_rng_state_op():
         return out
 
     @run_with_rng_state.py_impl(ProxyTorchDispatchMode)
-    def impl_proxy_dispatch_mode(rng_state, op, *args, **kwargs):
-        mode = _get_current_dispatch_mode()
-        assert mode is not None
-        with _pop_mode_temporarily() as mode:
-            if mode.enable_tracing:
-                with disable_proxy_modes_tracing():
-                    out = run_with_rng_state(rng_state, op, *args, **kwargs)
-                proxy_args = pytree.tree_map(
-                    mode.tracer.unwrap_proxy, (rng_state, op, *args)
-                )
-                proxy_kwargs = pytree.tree_map(mode.tracer.unwrap_proxy, kwargs)
-                out_proxy = mode.tracer.create_proxy(
-                    "call_function", run_with_rng_state, proxy_args, proxy_kwargs
-                )
-                return track_tensor_tree(
-                    out, out_proxy, constant=None, tracer=mode.tracer
-                )
-            else:
-                return run_with_rng_state(rng_state, op, *args, **kwargs)
+    def impl_proxy_dispatch_mode(mode, rng_state, op, *args, **kwargs):
+        if mode.enable_tracing:
+            with disable_proxy_modes_tracing():
+                out = run_with_rng_state(rng_state, op, *args, **kwargs)
+            proxy_args = pytree.tree_map(
+                mode.tracer.unwrap_proxy, (rng_state, op, *args)
+            )
+            proxy_kwargs = pytree.tree_map(mode.tracer.unwrap_proxy, kwargs)
+            out_proxy = mode.tracer.create_proxy(
+                "call_function", run_with_rng_state, proxy_args, proxy_kwargs
+            )
+            return track_tensor_tree(out, out_proxy, constant=None, tracer=mode.tracer)
+        else:
+            return run_with_rng_state(rng_state, op, *args, **kwargs)
 
     @run_with_rng_state.py_impl(DispatchKey.BackendSelect)
     def impl_backend_select(rng_state, op, *args, **kwargs):
@@ -273,10 +241,11 @@ def register_run_with_rng_state_op():
         return impl(rng_state, op, *args, **kwargs)
 
     @run_with_rng_state.py_impl(FakeTensorMode)
-    def impl_fake_tensor_mode(rng_state, op, *args, **kwargs):
+    def impl_fake_tensor_mode(mode, rng_state, op, *args, **kwargs):
         # Skip setting the set_rng_state as it does not work well with fake tensors.
         # And it does not matter for the fake tensor mode.
-        return op(*args, **kwargs)
+        with mode:
+            return op(*args, **kwargs)
 
     return run_with_rng_state
 

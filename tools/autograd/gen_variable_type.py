@@ -96,7 +96,6 @@ from .gen_inplace_or_view_type import (
     WRAPPER_REGISTRATION,
 )
 from .gen_trace_type import (
-    declare_returned_variables,
     get_return_value,
     MANUAL_AUTOGRAD_AND_TRACER,
     MANUAL_BACKEND,
@@ -166,6 +165,7 @@ DONT_REQUIRE_DERIVATIVE = {
     # This function returns nested_tensor shape as a tensor that is non-differentiable
     "_nested_tensor_size",
     "_nested_tensor_strides",
+    "_nested_tensor_storage_offsets",
 }
 
 # The C -> R functions at the time of adding this are still being audited and tested
@@ -226,6 +226,7 @@ GRADIENT_IMPLEMENTED_FOR_COMPLEX = {
     "select",
     "where",
     "as_strided",
+    "as_strided_copy",
     "as_strided_scatter",
     "slice",
     "constant_pad_nd",
@@ -298,7 +299,6 @@ GRADIENT_IMPLEMENTED_FOR_COMPLEX = {
     "addr",
     "linalg_householder_product",
     "ormqr",
-    "constant_pad_nd",
     "reflection_pad1d",
     "reflection_pad2d",
     "reflection_pad3d",
@@ -306,6 +306,7 @@ GRADIENT_IMPLEMENTED_FOR_COMPLEX = {
     "linalg_eig",
     "diagonal_copy",
     "diagonal_scatter",
+    "alias_copy",
     "select_backward",
     "diagonal_backward",
     "slice_backward",
@@ -316,7 +317,6 @@ GRADIENT_IMPLEMENTED_FOR_COMPLEX = {
     "replication_pad1d",
     "replication_pad2d",
     "replication_pad3d",
-    "take",
     "put",
     "put_",
     "_to_copy",
@@ -343,6 +343,7 @@ GRADIENT_IMPLEMENTED_FOR_COMPLEX = {
     "unfold_backward",
     "index",
     "masked_fill",
+    "masked_scatter_backward",
     "linalg_cross",
     "lu_unpack",
     "renorm",
@@ -418,7 +419,8 @@ ENFORCE_SAME_TENSOR_STORAGE = CodeTemplate(
     """\
 if (${tensor_name}_storage_saved.has_value() &&
     !at::impl::dispatch_mode_enabled() &&
-    !at::impl::tensor_has_dispatch(${tensor_name}))
+    !at::impl::tensor_has_dispatch(${tensor_name}) &&
+    !at::impl::tensor_has_dispatch(${out_tensor_name}))
   TORCH_INTERNAL_ASSERT(${tensor_name}_storage_saved.value().is_alias_of(${out_tensor_name}.storage()));
 """
 )
@@ -713,6 +715,16 @@ FW_DERIVATIVE_CHECK_TEMPLATE = CodeTemplate(
 isFwGradDefined(${req_inp})\
 """
 )
+FW_DERIVATIVE_SIZE_CHECK_TEMPLATE = CodeTemplate(
+    """\
+TORCH_CHECK(
+    self.size() == ${inp_name}.size(),
+      "Tensor lists must have the same number of tensors, got ",
+    self.size(),
+      " and ",
+    ${inp_name}.size());
+"""
+)
 
 FW_DERIVATIVE_TENSORLIST_CHECK_TEMPLATE = CodeTemplate(
     """\
@@ -725,7 +737,7 @@ FW_DERIVATIVE_DEFINED_GRAD_TEMPLATE = CodeTemplate(
 auto ${inp_name}_t_raw = toNonOptFwGrad(${inp});
 auto ${inp_name}_tensor = toNonOptTensor(${inp});
 auto ${inp_name}_t = (${inp_name}_t_raw.defined() || !${inp_name}_tensor.defined())
-  ? ${inp_name}_t_raw : at::${zeros_fn}(${inp_name}_tensor.sizes(), ${inp_name}_tensor.options());
+  ? ${inp_name}_t_raw : at::${zeros_fn}(${inp_name}_tensor.sym_sizes(), ${inp_name}_tensor.options());
 """
 )
 
@@ -963,7 +975,7 @@ def gen_variable_type_func(
                 result[f"type_derived_method_definitions_{key}"] = [type_definition]
                 result[f"wrapper_registrations_{key}"] = [wrapper_registration]
             else:
-                for key, _ in fn.info.items():
+                for key in fn.info.keys():
                     type_definition = METHOD_DEFINITION.substitute(
                         return_type=cpp.returns_type(
                             f.func.returns, symint=True
@@ -1003,6 +1015,7 @@ _foreach_ops_without_differentiability_info = {
     # No reference backward available as addcdiv/addcmul don't support Tensor as scaling factor.
     ("_foreach_addcdiv", "Tensor"),
     ("_foreach_addcmul", "Tensor"),
+    ("_foreach_copy", ""),
 }
 
 _foreach_ops_with_different_arity = {
@@ -1030,7 +1043,8 @@ def emit_body(
     base_name = get_base_name(f)
     view_info = get_view_info(f)
 
-    is_inplace_foreach = name.startswith("_foreach") and inplace
+    is_foreach = name.startswith("_foreach")
+    is_inplace_foreach = is_foreach and inplace
     if is_inplace_foreach:
         inplace_foreacharg2refarg: Dict[Argument, Argument] = {}
         refargname2inplace_foreacharg: Dict[str, Argument] = {}
@@ -1051,7 +1065,9 @@ def emit_body(
             for foreach_arg, ref_arg in zip(
                 f.func.arguments.flat_non_out, info.func.func.arguments.flat_non_out
             ):
-                foreach_arg_type = getattr(foreach_arg.type, "elem", foreach_arg.type)
+                foreach_arg_type = foreach_arg.type
+                if isinstance(foreach_arg_type, ListType):
+                    foreach_arg_type = foreach_arg_type.elem
                 assert foreach_arg_type == ref_arg.type
                 inplace_foreacharg2refarg[foreach_arg] = ref_arg
                 refargname2inplace_foreacharg[ref_arg.name] = foreach_arg
@@ -1238,7 +1254,7 @@ def emit_body(
                 if a.name == derivative_var_name:
                     break
             else:
-                raise AssertionError()
+                raise AssertionError
             return f"grad_fn->should_compute_output({edge_off})"
 
         if is_inplace_foreach:
@@ -1460,8 +1476,12 @@ def emit_body(
                 type == BaseCType(tensorListT)
                 or type == ListCType(OptionalCType(BaseCType(tensorT)))
                 or type == BaseCType(iTensorListRefT)
+                or type == VectorCType(BaseCType(tensorT))
             ):
-                expr = f"make_saved_variable_list({name})"
+                # See Note [nuanced return type of out-of-place foreach functions]
+                if type == VectorCType(BaseCType(tensorT)):
+                    assert is_foreach and is_output
+                expr = f"make_saved_variable_list({name}, {str(is_foreach and is_output).lower()})"
                 name += "_"
             elif type == BaseCType(intArrayRefT):
                 expr = expr + ".vec()"
@@ -1766,7 +1786,7 @@ def emit_body(
 
     def emit_any_has_forward_grad() -> List[str]:
         content: List[str] = []
-        if not is_inplace_foreach:
+        if not is_foreach:
             for derivative in fw_derivatives:
                 requires_fw_grad = get_any_has_fw_grad_cond(derivative=derivative)
                 if info and info.output_differentiability_conditions:
@@ -1778,21 +1798,40 @@ def emit_body(
         else:
             for derivative in fw_derivatives:
                 bool_vector_name = get_any_has_forward_grad_name(derivative.var_names)
-                cur_derivative_conditions = [
-                    FW_DERIVATIVE_CHECK_TEMPLATE.substitute(
-                        req_inp=refargname2inplace_foreacharg[inp.name].name
-                        + (
-                            "[i]"
-                            if is_tensor_list_type(
-                                refargname2inplace_foreacharg[inp.name].type
-                            )
-                            else ""
-                        ),
+                cur_derivative_conditions = []
+                for inp in differentiable_inputs:
+                    if derivative.required_inputs_fw_grad is None:
+                        continue
+                    if inp.name not in derivative.required_inputs_fw_grad:
+                        continue
+                    inp_name = (
+                        inp.name
+                        if not inplace
+                        else refargname2inplace_foreacharg[inp.name].name
                     )
-                    for inp in differentiable_inputs
-                    if derivative.required_inputs_fw_grad is not None
-                    and inp.name in derivative.required_inputs_fw_grad
-                ]
+                    inp_type = (
+                        inp.type
+                        if not inplace
+                        else refargname2inplace_foreacharg[inp.name].type
+                    )
+                    is_list_type = is_tensor_list_type(inp_type)
+                    if is_list_type:
+                        if inp_name != "self":
+                            content.append(
+                                FW_DERIVATIVE_SIZE_CHECK_TEMPLATE.substitute(
+                                    inp_name=inp_name
+                                )
+                            )
+                        cur_derivative_conditions.append(
+                            FW_DERIVATIVE_CHECK_TEMPLATE.substitute(
+                                req_inp=inp_name + "[i]"
+                            )
+                        )
+                    else:
+                        cur_derivative_conditions.append(
+                            FW_DERIVATIVE_CHECK_TEMPLATE.substitute(req_inp=inp_name)
+                        )
+
                 content.append(f"std::vector<bool> {bool_vector_name}(self.size());")
                 content.append("for (const auto& i : c10::irange(self.size())) {")
                 content.append(
@@ -1826,17 +1865,19 @@ def emit_body(
             unpacked_arguments = ""
             for inp in differentiable_inputs:
                 inp_name = inp.name
-                is_input_tensorlist = is_inplace_foreach and is_tensor_list_type(
-                    refargname2inplace_foreacharg[inp.name].type
+                is_input_tensorlist = is_foreach and is_tensor_list_type(
+                    inp.type
+                    if not inplace
+                    else refargname2inplace_foreacharg[inp.name].type
                 )
                 input_suffix = "[i]" if is_input_tensorlist else ""
                 if is_inplace_foreach:
                     if inp.name in refargname2inplace_foreacharg:
                         inp_name = refargname2inplace_foreacharg[inp.name].name
                 zeros_fn = (
-                    "zeros"
+                    "zeros_symint"
                     if inplace and inp.name == "self"
-                    else "_efficientzerotensor"
+                    else "_efficientzerotensor_symint"
                 )
                 if inp.name in derivative.required_inputs_fw_grad:
                     unpacked_arguments += (
@@ -1854,7 +1895,7 @@ def emit_body(
                         )
                     )
             if derivative.required_original_self_value:
-                input_suffix = "s[i]" if is_input_tensorlist else ""
+                input_suffix = "s[i]" if is_inplace_foreach else ""
                 unpacked_arguments += FW_DERIVATIVE_DEFINED_GRAD_TEMPLATE.substitute(
                     inp_name="original_self",
                     inp="original_self" + input_suffix,
@@ -1884,14 +1925,14 @@ def emit_body(
                 # Is there a way to get from BaseType to BaseCType
                 if len(derivative.var_types) == 1:
                     opt_res_grad_type = OptionalCType(BaseCType(tensorT)).cpp_type()
-                    if not is_inplace_foreach:
+                    if not is_foreach:
                         fw_grad_setters.append(
                             FW_DERIVATIVE_SETTER_TENSOR.substitute(
                                 out_arg=res[0], is_inplace=is_inplace_str
                             )
                         )
                     else:
-                        assert res[0] == "self"
+                        assert res[0] == ("result" if not inplace else "self")
                         fw_grad_setters.append(
                             FW_DERIVATIVE_SETTER_TENSOR_FOREACH.substitute(
                                 out_arg=res[0], is_inplace=is_inplace_str
@@ -1916,18 +1957,29 @@ def emit_body(
                 assert (
                     len(derivative.var_types) == 1
                 ), "Expected number of outputs to be 1 if function returns ListType"
-                opt_res_grad_type = OptionalCType(
-                    VectorCType(BaseCType(tensorT))
-                ).cpp_type()
-                fw_grad_setters.append(
-                    FW_DERIVATIVE_SETTER_TENSOR_LIST.substitute(
-                        out_arg=res[0], is_inplace=is_inplace_str
+                if not is_foreach:
+                    opt_res_grad_type = OptionalCType(
+                        VectorCType(BaseCType(tensorT))
+                    ).cpp_type()
+                    fw_grad_setters.append(
+                        FW_DERIVATIVE_SETTER_TENSOR_LIST.substitute(
+                            out_arg=res[0], is_inplace=is_inplace_str
+                        )
                     )
-                )
+                else:
+                    # TODO(crcrpar): Should this (= the foreach specific logic) be refactored somehow?
+                    # Only out-place foreach functions that have entries in `tools/autograd/derivatives.yaml`
+                    # can reach here.
+                    opt_res_grad_type = OptionalCType(BaseCType(tensorT)).cpp_type()
+                    fw_grad_setters.append(
+                        FW_DERIVATIVE_SETTER_TENSOR_FOREACH.substitute(
+                            out_arg=res[0], is_inplace=is_inplace_str
+                        )
+                    )
             else:
                 raise RuntimeError("Unsupported output type for forward derivative")
 
-            if not is_inplace_foreach:
+            if not is_foreach:
                 fw_grad_opt_definition = f"{opt_res_grad_type} {'_'.join(res)}_new_fw_grad_opt = c10::nullopt;"
                 # View ops create fw_grad that already is a view of the base's fw_grad so just use that
                 content.append(
@@ -1945,20 +1997,30 @@ def emit_body(
                     f"std::vector<{opt_res_grad_type}> {'_'.join(res)}_new_fw_grad_opts"
                     "(self.size(), c10::nullopt);"
                 )
-                inplace_foreach_forward_grad_formula = derivative.formula
-                for _foreach_arg, _ref_arg in inplace_foreacharg2refarg.items():
-                    # note(crcrpar): Massage only Scalar and ArrayRef<Scalar> here.
-                    if not (
-                        is_tensor_type(_foreach_arg.type)
-                        or is_tensor_list_type(_foreach_arg.type)
-                    ):
-                        pattern = _foreach_arg.name
-                        if isinstance(_foreach_arg.type, ListType):
-                            pattern += "[i]"
-                        inplace_foreach_forward_grad_formula = (
-                            inplace_foreach_forward_grad_formula.replace(
-                                _ref_arg.name, pattern
+                foreach_forward_grad_formula = derivative.formula
+                _foreach_arg: Union[Argument, DifferentiableInput]
+                if inplace:
+                    for _foreach_arg, _ref_arg in inplace_foreacharg2refarg.items():
+                        # note(crcrpar): Massage only Scalar and ArrayRef<Scalar> here.
+                        if not (
+                            is_tensor_type(_foreach_arg.type)
+                            or is_tensor_list_type(_foreach_arg.type)
+                        ):
+                            pattern = _foreach_arg.name
+                            if isinstance(_foreach_arg.type, ListType):
+                                pattern += "[i]"
+                            foreach_forward_grad_formula = (
+                                foreach_forward_grad_formula.replace(
+                                    _ref_arg.name, pattern
+                                )
                             )
+                else:
+                    if (
+                        "result" in foreach_forward_grad_formula
+                        and "result[i]" not in foreach_forward_grad_formula
+                    ):
+                        foreach_forward_grad_formula = (
+                            foreach_forward_grad_formula.replace("result", "result[i]")
                         )
 
                 content.append(
@@ -1969,7 +2031,7 @@ def emit_body(
                             get_any_has_forward_grad_name(derivative.var_names) + "[i]"
                             for derivative in fw_derivatives
                         ),
-                        formula=inplace_foreach_forward_grad_formula,
+                        formula=foreach_forward_grad_formula,
                         unpacked_arguments=unpacked_arguments,
                     )
                 )
@@ -2031,7 +2093,11 @@ def emit_body(
             else:
                 any_has_fw_grad = " || ".join(
                     [
-                        FW_DERIVATIVE_CHECK_TEMPLATE.substitute(req_inp=inp.name)
+                        (
+                            FW_DERIVATIVE_TENSORLIST_CHECK_TEMPLATE
+                            if is_tensor_list_type(inp.type)
+                            else FW_DERIVATIVE_CHECK_TEMPLATE
+                        ).substitute(req_inp=inp.name)
                         for inp in differentiable_inputs
                         if inp.name in derivative.required_inputs_fw_grad
                     ]
@@ -2066,7 +2132,6 @@ def emit_body(
         body.extend(emit_check_inplace())
         body.extend(emit_original_self_definition())
         body.extend(setup_derivative(differentiable_inputs))
-    body.append(declare_returned_variables(f))
 
     body.append(emit_call(f, unpacked_bindings, try_jit_decomposition))
     if requires_derivative:

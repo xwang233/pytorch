@@ -10,7 +10,6 @@
 #include <torch/csrc/jit/passes/eliminate_no_ops.h>
 #include <torch/csrc/jit/passes/inliner.h>
 #include <torch/csrc/jit/passes/lower_tuples.h>
-#include <torch/csrc/jit/passes/remove_mutation.h>
 #include <torch/csrc/jit/runtime/graph_executor_impl.h>
 
 #include <stack>
@@ -168,10 +167,10 @@ class AttributePropagator {
   // Examples:
   // submodule1.submodule2.foo -> {submodule2, "foo"}
   // submodule1.non_existent_module.foo -> nullopt
-  c10::optional<ResolvedName> resolveName(const std::string& name) {
+  std::optional<ResolvedName> resolveName(const std::string& name) {
     auto sub_names = splitName(name);
     if (sub_names.empty()) {
-      return c10::nullopt;
+      return std::nullopt;
     }
     auto& attr_name = sub_names.back();
     auto cur_module = module_;
@@ -190,7 +189,7 @@ class AttributePropagator {
         }
       }
       if (!found) {
-        return c10::nullopt;
+        return std::nullopt;
       }
     }
 
@@ -208,7 +207,7 @@ class AttributePropagator {
       return std::make_pair(std::move(cur_module), std::move(attr_name));
     }
 
-    return c10::nullopt;
+    return std::nullopt;
   }
 
   bool _loadModulePath(Value* input, std::shared_ptr<Graph>& graph) {
@@ -226,12 +225,12 @@ class AttributePropagator {
     return true;
   }
 
-  c10::optional<std::deque<std::string>> getModulePath(
+  std::optional<std::deque<std::string>> getModulePath(
       Value* input,
       std::shared_ptr<Graph>& graph) {
     bool success = _loadModulePath(input, graph);
     if (!success) {
-      return c10::nullopt;
+      return std::nullopt;
     }
     return names_;
   }
@@ -344,7 +343,7 @@ class AttributePropagator {
   void recordMutableAttrs(std::shared_ptr<Graph>& graph) {
     std::stack<Block*> blocks({graph->block()});
     std::unique_ptr<AliasDb> aliasDb =
-        torch::make_unique<AliasDb>(graph, /* isFrozen */ true);
+        std::make_unique<AliasDb>(graph, /* isFrozen */ true);
     while (!blocks.empty()) {
       Block* block = blocks.top();
       blocks.pop();

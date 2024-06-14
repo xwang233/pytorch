@@ -1,8 +1,9 @@
+# mypy: allow-untyped-defs
 # Copyright (c) Meta Platforms, Inc. and affiliates
 from typing import cast, List, Optional, Sequence, Tuple
 
 import torch
-from torch.distributed._tensor.op_schema import OpSchema, OutputSharding
+from torch.distributed._tensor._op_schema import OpSchema, OutputSharding
 from torch.distributed._tensor.ops.common_rules import pointwise_rule
 from torch.distributed._tensor.ops.utils import register_prop_rule
 
@@ -12,6 +13,7 @@ from torch.distributed._tensor.placement_types import (
     Placement,
     Replicate,
     Shard,
+    TensorMeta,
 )
 
 aten = torch.ops.aten  # pyre-ignore
@@ -59,15 +61,11 @@ def _prop__foreach_binop_list(op_schema: OpSchema) -> OutputSharding:
         # and self is replicated.
         return OutputSharding(
             output_spec=None,
-            schema_suggestions=[
-                OpSchema(
-                    func_schema=op_schema.func_schema,
-                    args_schema=(self, self, scalar) if scalar else (self, self),
-                    kwargs_schema=op_schema.kwargs_schema,
-                    is_inplace=op_schema.is_inplace,
-                    is_out_variant=op_schema.is_out_variant,
-                )
-            ],
+            redistribute_schema=OpSchema(
+                op=op_schema.op,
+                args_schema=(self, self, scalar) if scalar else (self, self),
+                kwargs_schema=op_schema.kwargs_schema,
+            ),
         )
     else:
         return OutputSharding(output_spec=self)
@@ -106,17 +104,13 @@ def _prop__foreach_addcop_scalar(op_schema: OpSchema):
         # and self is replicated.
         return OutputSharding(
             output_spec=None,
-            schema_suggestions=[
-                OpSchema(
-                    func_schema=op_schema.func_schema,
-                    args_schema=(self, self, self, scalar)
-                    if scalar
-                    else (self, self, self),
-                    kwargs_schema=op_schema.kwargs_schema,
-                    is_inplace=op_schema.is_inplace,
-                    is_out_variant=op_schema.is_out_variant,
-                )
-            ],
+            redistribute_schema=OpSchema(
+                op=op_schema.op,
+                args_schema=(self, self, self, scalar)
+                if scalar
+                else (self, self, self),
+                kwargs_schema=op_schema.kwargs_schema,
+            ),
         )
     else:
         return OutputSharding(output_spec=self)
@@ -156,15 +150,11 @@ def _prop__fused_adam(op_schema: OpSchema):
         )
         return OutputSharding(
             output_spec=None,
-            schema_suggestions=[
-                OpSchema(
-                    func_schema=op_schema.func_schema,
-                    args_schema=new_schemas + op_schema.args_schema[NT:],
-                    kwargs_schema=op_schema.kwargs_schema,
-                    is_inplace=op_schema.is_inplace,
-                    is_out_variant=op_schema.is_out_variant,
-                )
-            ],
+            redistribute_schema=OpSchema(
+                op=op_schema.op,
+                args_schema=new_schemas + op_schema.args_schema[NT:],
+                kwargs_schema=op_schema.kwargs_schema,
+            ),
         )
     else:
         return OutputSharding(output_spec=(op_schema.args_schema[0],) * NT)  # type: ignore[arg-type]
@@ -188,24 +178,20 @@ def _prop_nll_loss_forward(op_schema: OpSchema) -> OutputSharding:
         )
         return OutputSharding(
             output_spec=None,
-            schema_suggestions=[
-                OpSchema(
-                    func_schema=op_schema.func_schema,
-                    args_schema=(new_self, target) + op_schema.args_schema[2:],
-                    kwargs_schema=op_schema.kwargs_schema,
-                    is_inplace=op_schema.is_inplace,
-                    is_out_variant=op_schema.is_out_variant,
-                )
-            ],
+            redistribute_schema=OpSchema(
+                op=op_schema.op,
+                args_schema=(new_self, target) + op_schema.args_schema[2:],
+                kwargs_schema=op_schema.kwargs_schema,
+            ),
         )
     else:
         return OutputSharding(
             output_spec=(
                 # by default, nll_loss_forward conducts a reduction and returns
                 # a scalar tensor, and hence the _Partial placements.
-                DTensorSpec(mesh=self.mesh, placements=[_Partial()]),
+                DTensorSpec(mesh=self.mesh, placements=(_Partial(),)),
                 # the 2nd output total_weight is always a scalar tensor
-                DTensorSpec(mesh=self.mesh, placements=[Replicate()]),
+                DTensorSpec(mesh=self.mesh, placements=(Replicate(),)),
             )
         )
 
@@ -231,7 +217,7 @@ def _prop_stack(op_schema: OpSchema) -> OutputSharding:
     assert all(
         t.shape == tensors[0].shape for t in tensors
     ), f"expect all tensors to have the same shape, but got {tensors}."
-    # TODO: provide schema_suggestions when placements do not match
+    # TODO: provide redistribute_schema when placements do not match
     assert all(
         t.placements == tensors[0].placements for t in tensors
     ), f"expect all tensors to have the same placements, but got {tensors}."
@@ -266,7 +252,7 @@ def _prop_select(op_schema: OpSchema) -> OutputSharding:
             new_placements.append(p)
 
     return OutputSharding(
-        output_spec=DTensorSpec(mesh=tensor.mesh, placements=new_placements)
+        output_spec=DTensorSpec(mesh=tensor.mesh, placements=tuple(new_placements))
     )
 
 
@@ -322,7 +308,7 @@ def _prop_native_layer_norm_backward(op_schema: OpSchema) -> OutputSharding:
     weight_grad = (
         DTensorSpec(
             mesh=weight.mesh,
-            placements=[_Partial()] * weight.mesh.ndim,
+            placements=tuple([_Partial()] * weight.mesh.ndim),
         )
         if weight
         else None
@@ -330,7 +316,7 @@ def _prop_native_layer_norm_backward(op_schema: OpSchema) -> OutputSharding:
     bias_grad = (
         DTensorSpec(
             mesh=bias.mesh,
-            placements=[_Partial()] * bias.mesh.ndim,
+            placements=tuple([_Partial()] * bias.mesh.ndim),
         )
         if bias
         else None
@@ -349,14 +335,10 @@ def _prop_native_layer_norm_backward(op_schema: OpSchema) -> OutputSharding:
 def _refine_sharding(
     op_schema: OpSchema, active_dim: Optional[int]
 ) -> Sequence[Placement]:
-    """
-    Considers 2 first inputs of op_schema as having same shape,
-    and returns suggested placement for a pointwise operation.
-    """
+    """Considers 2 first inputs of op_schema as having same shape, and returns suggested placement for a pointwise operation."""
     # consider the operating dimension as a singleton to prevent sharding on it
     # however, if active_dim is None, this means the input and output shapes are equal and
     # we'll apply exactly the pointwise rule.
-    from torch.fx.passes.shape_prop import TensorMetadata
 
     args_schema = []
     for s in op_schema.args_schema[:2]:
@@ -365,36 +347,30 @@ def _refine_sharding(
             DTensorSpec(
                 mesh=s.mesh,  # type: ignore[attr-defined]
                 placements=s.placements,  # type: ignore[attr-defined]
-                tensor_meta=TensorMetadata(
+                tensor_meta=TensorMeta(
                     shape=torch.Size(
                         s.shape[0:active_dim] + (1,) + s.shape[active_dim + 1 :]
                     )
                     if active_dim is not None
                     else s.shape,
-                    dtype=s.tensor_meta.dtype,
-                    requires_grad=s.tensor_meta.requires_grad,
                     stride=s.tensor_meta.stride,
-                    memory_format=s.tensor_meta.memory_format,
-                    is_quantized=s.tensor_meta.is_quantized,
-                    qparams=s.tensor_meta.qparams,
+                    dtype=s.tensor_meta.dtype,
                 ),
             )
         )
 
     op_schema = OpSchema(
-        func_schema=op_schema.func_schema,
+        op=op_schema.op,
         args_schema=args_schema,  # type: ignore[arg-type]
         kwargs_schema={},
-        is_inplace=op_schema.is_inplace,
-        is_out_variant=op_schema.is_out_variant,
     )
     output_sharding = pointwise_rule(op_schema, linearity=False)
     if output_sharding.output_spec:
         assert isinstance(output_sharding.output_spec, DTensorSpec)
         return output_sharding.output_spec.placements
     else:
-        assert output_sharding.schema_suggestions is not None
-        out_schema = output_sharding.schema_suggestions[0].args_schema[0]
+        assert output_sharding.redistribute_schema is not None
+        out_schema = output_sharding.redistribute_schema.args_schema[0]
         assert isinstance(out_schema, DTensorSpec)
         return tuple(out_schema.placements)
 
@@ -450,23 +426,21 @@ def prop_slice_scatter(op_schema: OpSchema) -> OutputSharding:
         # otherwise, return the suggestion.
         return OutputSharding(
             output_spec=None,
-            schema_suggestions=[
-                OpSchema(
-                    func_schema=op_schema.func_schema,
-                    args_schema=(
-                        DTensorSpec(
-                            mesh=input.mesh,
-                            placements=input_suggestion,
-                            tensor_meta=input.tensor_meta,
-                        ),
-                        DTensorSpec(
-                            mesh=src.mesh,
-                            placements=input_suggestion,
-                            tensor_meta=src.tensor_meta,
-                        ),
-                    )
-                    + op_schema.args_schema[2:],
-                    kwargs_schema=op_schema.kwargs_schema,
+            redistribute_schema=OpSchema(
+                op=op_schema.op,
+                args_schema=(
+                    DTensorSpec(
+                        mesh=input.mesh,
+                        placements=input_suggestion,
+                        tensor_meta=input.tensor_meta,
+                    ),
+                    DTensorSpec(
+                        mesh=src.mesh,
+                        placements=input_suggestion,
+                        tensor_meta=src.tensor_meta,
+                    ),
                 )
-            ],
+                + op_schema.args_schema[2:],
+                kwargs_schema=op_schema.kwargs_schema,
+            ),
         )

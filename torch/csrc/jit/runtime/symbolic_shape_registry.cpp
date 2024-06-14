@@ -11,8 +11,7 @@
 #include <torch/csrc/jit/serialization/import_source.h>
 #include <unordered_map>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 namespace {
 std::mutex lock;
 
@@ -366,7 +365,7 @@ void loadFunctions() {
         [&](const std::string& name) -> std::shared_ptr<Source> { return src; },
         1);
     compilation_unit->define(
-        c10::nullopt, shape_compute_functions, resolver, nullptr);
+        std::nullopt, shape_compute_functions, resolver, nullptr);
     loadModule(*compilation_unit);
   } catch (...) {
     // Reset the cache and compilation unit so that we don't get weird errors
@@ -378,7 +377,7 @@ void loadFunctions() {
 }
 } // anonymous namespace
 
-c10::optional<std::shared_ptr<Graph>> shapeComputeGraphForSchema(
+std::optional<std::shared_ptr<Graph>> shapeComputeGraphForSchema(
     const FunctionSchema& schema) {
   std::lock_guard<std::mutex> guard(lock);
   if (cached_schema_to_graph.empty()) {
@@ -392,10 +391,10 @@ c10::optional<std::shared_ptr<Graph>> shapeComputeGraphForSchema(
   }
   GRAPH_DEBUG("Could not find schema: ", schema);
 
-  return c10::nullopt;
+  return std::nullopt;
 }
 
-TORCH_API c10::optional<BoundedShapeGraphs> boundedGraphsForSchema(
+TORCH_API std::optional<BoundedShapeGraphs> boundedGraphsForSchema(
     const FunctionSchema& schema) {
   std::lock_guard<std::mutex> guard(lock);
   if (cached_bounded_schema_to_graph.empty()) {
@@ -407,7 +406,7 @@ TORCH_API c10::optional<BoundedShapeGraphs> boundedGraphsForSchema(
     return cache_it->second;
   }
 
-  return c10::nullopt;
+  return std::nullopt;
 }
 
 void RegisterShapeComputeGraphForSchema(
@@ -446,5 +445,4 @@ void LintShapeComputeGraph(
   // TODO: other checks ? list ops which we don't symbolically optimize, etc ?
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

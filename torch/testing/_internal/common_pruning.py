@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+# mypy: ignore-errors
+
 # Owner(s): ["module: unknown"]
 
 from torch.ao.pruning import BaseSparsifier

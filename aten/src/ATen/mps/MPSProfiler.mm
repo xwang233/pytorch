@@ -195,7 +195,7 @@ void MPSProfiler::initialize() {
   }
 }
 
-void MPSProfiler::StartTrace(const string& mode, bool waitUntilCompleted) {
+void MPSProfiler::StartTrace(const std::string& mode, bool waitUntilCompleted) {
   TORCH_CHECK(m_profile_options == ProfileOptions::OPTIONS_NONE, "Tracing Signposts is already enabled ");
 
   std::stringstream ss(mode);
@@ -504,7 +504,7 @@ void MPSProfiler::logOperationsProfilingStats(std::FILE* f) const {
                opInfo->runCount,
                fmt::format("{:.3f}", opInfo->totalSchedulingTime / double(opInfo->runCount)),
                fmt::format("{:.3f}", opInfo->totalGpuTime / double(opInfo->runCount)),
-               fmt::format("{:.3f}", opInfo->totalGpuTime),
+               fmt::format("{:.3f}", opInfo->totalGpuTime.load()),
                opInfo->strKey);
   }
 }
@@ -556,7 +556,7 @@ void MPSProfiler::logCPUFallbackProfilingStats(std::FILE* f) const {
                cpuFbInfo->profileId,
                cpuFbInfo->runCount,
                fmt::format("{:.3f}", cpuFbInfo->totalSchedulingTime / double(cpuFbInfo->runCount)),
-               fmt::format("{:.3f}", cpuFbInfo->totalSchedulingTime),
+               fmt::format("{:.3f}", cpuFbInfo->totalSchedulingTime.load()),
                getIMPSAllocator()->formatSize(cpuFbInfo->totalCopyOverhead),
                cpuFbInfo->opName);
   }
@@ -607,8 +607,8 @@ void MPSProfiler::logCopyProfilingStats(std::FILE* f) const {
           copyStat.kindStr,
           copyStat.totalCount,
           getIMPSAllocator()->formatSize(copyStat.length),
-          fmt::format("{:.3f}", copyStat.totalSchedulingTime),
-          fmt::format("{:.3f}", copyStat.totalGpuTime),
+          fmt::format("{:.3f}", copyStat.totalSchedulingTime.load()),
+          fmt::format("{:.3f}", copyStat.totalGpuTime.load()),
           copyStat.scalarsCount,
           fmt::format("{:.2f} %",
                       copyStat.totalGpuTime > 0.0
@@ -764,6 +764,41 @@ void MPSProfiler::handleIntSignal(int signal) {
 // used to capture sigint signal to log profiling stats
 struct sigaction MPSProfiler::currentSigint {};
 struct sigaction MPSProfiler::previousSigint {};
+
+bool MPSProfiler::isCapturing() const {
+  return [captureManager isCapturing];
+}
+
+bool MPSProfiler::isCaptureEnabled() const {
+  if (captureManager == nil) {
+    captureManager = [MTLCaptureManager sharedCaptureManager];
+  }
+  static bool isEnabled = [this]() {
+    return [captureManager supportsDestination:MTLCaptureDestinationGPUTraceDocument];
+  }();
+  return isEnabled;
+}
+
+void MPSProfiler::startCapture(const std::string& name, MPSStream* stream) {
+  if (captureManager == nil) {
+    captureManager = [MTLCaptureManager sharedCaptureManager];
+  }
+  NSError* err = nil;
+  NSString* fname = [NSString stringWithFormat:@"%04d-%s.gputrace", captureCount++, name.c_str()];
+  MTLCaptureDescriptor* captureDescriptor = [MTLCaptureDescriptor new];
+  captureDescriptor.captureObject = stream ? (id)stream->commandQueue() : (id)MPSDevice::getInstance()->device();
+  captureDescriptor.destination = MTLCaptureDestinationGPUTraceDocument;
+  captureDescriptor.outputURL = [NSURL fileURLWithPath:fname];
+  auto rc = [captureManager startCaptureWithDescriptor:captureDescriptor error:&err];
+  TORCH_CHECK(rc, "Failed to start capture of ", [fname UTF8String], " error ", [[err description] UTF8String]);
+}
+
+void MPSProfiler::stopCapture(MPSStream* stream) {
+  if (stream) {
+    stream->synchronize(SyncType::COMMIT);
+  }
+  [captureManager stopCapture];
+}
 
 } // namespace Profiler
 

@@ -80,7 +80,7 @@ class SelectiveBuilder:
         }
         top_level_keys = set(data.keys())
         if len(top_level_keys - valid_top_level_keys) > 0:
-            raise Exception(
+            raise Exception(  # noqa: TRY002
                 "Got unexpected top level keys: {}".format(
                     ",".join(top_level_keys - valid_top_level_keys),
                 )
@@ -93,7 +93,7 @@ class SelectiveBuilder:
             di_list = data["debug_info"]
             assert isinstance(di_list, list)
 
-            debug_info = tuple((str(x) for x in di_list))
+            debug_info = tuple(str(x) for x in di_list)
 
         operators = {}
         operators_dict = data.get("operators", {})
@@ -141,7 +141,7 @@ class SelectiveBuilder:
 
     @staticmethod
     def from_yaml_path(config_path: str) -> "SelectiveBuilder":
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             contents = yaml.safe_load(f)
             return SelectiveBuilder.from_yaml_dict(contents)
 
@@ -255,7 +255,7 @@ class SelectiveBuilder:
                     break
             if not key_found:
                 if "default" not in kernel_key:
-                    raise Exception("Missing kernel for the model")
+                    raise Exception("Missing kernel for the model")  # noqa: TRY002
                 else:
                     result_set.add("default")
 

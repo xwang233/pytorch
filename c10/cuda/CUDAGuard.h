@@ -6,10 +6,7 @@
 #include <c10/cuda/CUDAMacros.h>
 #include <c10/cuda/impl/CUDAGuardImpl.h>
 
-#include <cstddef>
-
-namespace c10 {
-namespace cuda {
+namespace c10::cuda {
 
 // This code is kind of boilerplatey.  See Note [Whither the DeviceGuard
 // boilerplate]
@@ -245,7 +242,7 @@ struct OptionalCUDAStreamGuard {
   optional<CUDAStream> original_stream() const {
     auto r = guard_.original_stream();
     if (r.has_value()) {
-      return make_optional(CUDAStream(CUDAStream::UNCHECKED, r.value()));
+      return std::make_optional(CUDAStream(CUDAStream::UNCHECKED, r.value()));
     } else {
       return nullopt;
     }
@@ -257,7 +254,7 @@ struct OptionalCUDAStreamGuard {
   optional<CUDAStream> current_stream() const {
     auto r = guard_.current_stream();
     if (r.has_value()) {
-      return make_optional(CUDAStream(CUDAStream::UNCHECKED, r.value()));
+      return std::make_optional(CUDAStream(CUDAStream::UNCHECKED, r.value()));
     } else {
       return nullopt;
     }
@@ -301,5 +298,4 @@ struct CUDAMultiStreamGuard {
   }
 };
 
-} // namespace cuda
-} // namespace c10
+} // namespace c10::cuda

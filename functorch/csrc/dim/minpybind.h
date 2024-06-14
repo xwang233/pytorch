@@ -8,7 +8,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <utility>
-#include <iostream>
+#include <ostream>
 #include <memory>
 
 #define PY_BEGIN try {
@@ -383,10 +383,6 @@ mpy::object str(handle h) {
 
 bool is_int(handle h) {
     return PyLong_Check(h.ptr());
-}
-
-bool is_float(handle h) {
-    return PyFloat_Check(h.ptr());
 }
 
 bool is_none(handle h) {

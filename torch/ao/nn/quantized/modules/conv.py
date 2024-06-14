@@ -1,4 +1,4 @@
-# coding=utf-8
+# mypy: allow-untyped-defs
 r"""Quantized convolution modules."""
 
 from typing import Optional, List, TypeVar
@@ -64,7 +64,7 @@ class _ConvNd(WeightedQuantizedModule):
         self.output_padding = output_padding
         self.groups = groups
         if padding_mode not in _SUPPORTED_PADDING:
-            raise ValueError("'padding_mode' {} is not supported by quantized convolution".format(padding_mode))
+            raise ValueError(f"'padding_mode' {padding_mode} is not supported by quantized convolution")
         self.padding_mode = padding_mode
         # Initialize as NCHW. set_weight will internally transpose to NHWC.
         if self.transposed:
@@ -216,7 +216,7 @@ class _ConvNd(WeightedQuantizedModule):
             return qconv
 
     @staticmethod
-    def from_float(cls, mod):
+    def from_float(cls, mod, use_precomputed_fake_quant=False):
         if hasattr(mod, "weight_fake_quant"):
             # assert type(mod) == cls.__QAT_MODULE, " nnq." + cls.__name__ + \
             # ".from_float only works for " + cls.__QAT_MODULE.__name__
@@ -307,8 +307,8 @@ class Conv1d(_ConvNd):
     _FLOAT_MODULE = nn.Conv1d
     _NNIQAT_CONV_BN_MODULE = nniqat.ConvBn1d
     _NNI_CONV_RELU_MODULE = nni.ConvReLU1d
-    _NNI_CONV_ADD_MODULE = None
-    _NNI_CONV_ADD_RELU_MODULE = None
+    _NNI_CONV_ADD_MODULE: None = None
+    _NNI_CONV_ADD_RELU_MODULE: None = None
 
     def __init__(self,
                  in_channels: int,
@@ -369,14 +369,14 @@ class Conv1d(_ConvNd):
         return ops.quantized.conv1d(input, self._packed_params, self.scale, self.zero_point)
 
     @classmethod
-    def from_float(cls, mod):
+    def from_float(cls, mod, use_precomputed_fake_quant=False):
         r"""Creates a quantized module from a float module or qparams_dict.
 
         Args:
             mod (Module): a float module, either produced by torch.ao.quantization
               utilities or provided by the user
         """
-        return _ConvNd.from_float(cls, mod)
+        return _ConvNd.from_float(cls, mod, use_precomputed_fake_quant=use_precomputed_fake_quant)
 
 
 class Conv2d(_ConvNd):
@@ -470,14 +470,14 @@ class Conv2d(_ConvNd):
             input, self._packed_params, self.scale, self.zero_point)
 
     @classmethod
-    def from_float(cls, mod):
+    def from_float(cls, mod, use_precomputed_fake_quant=False):
         r"""Creates a quantized module from a float module or qparams_dict.
 
         Args:
             mod (Module): a float module, either produced by torch.ao.quantization
               utilities or provided by the user
         """
-        return _ConvNd.from_float(cls, mod)
+        return _ConvNd.from_float(cls, mod, use_precomputed_fake_quant=use_precomputed_fake_quant)
 
 
 class Conv3d(_ConvNd):
@@ -521,8 +521,8 @@ class Conv3d(_ConvNd):
     _FLOAT_MODULE = nn.Conv3d
     _NNIQAT_CONV_BN_MODULE = nniqat.ConvBn3d
     _NNI_CONV_RELU_MODULE = nni.ConvReLU3d
-    _NNI_CONV_ADD_MODULE = None
-    _NNI_CONV_ADD_RELU_MODULE = None
+    _NNI_CONV_ADD_MODULE: None = None
+    _NNI_CONV_ADD_RELU_MODULE: None = None
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1,
                  padding=0, dilation=1, groups=1, bias=True,
@@ -572,14 +572,14 @@ class Conv3d(_ConvNd):
             input, self._packed_params, self.scale, self.zero_point)
 
     @classmethod
-    def from_float(cls, mod):
+    def from_float(cls, mod, use_precomputed_fake_quant=False):
         r"""Creates a quantized module from a float module or qparams_dict.
 
         Args:
             mod (Module): a float module, either produced by torch.ao.quantization
               utilities or provided by the user
         """
-        return _ConvNd.from_float(cls, mod)
+        return _ConvNd.from_float(cls, mod, use_precomputed_fake_quant=use_precomputed_fake_quant)
 
 # === Transposed Convolutions ===
 MOD = TypeVar('MOD', bound=nn.modules.conv._ConvNd)
@@ -593,7 +593,7 @@ class _ConvTransposeNd(_ConvNd):
                  padding, dilation, transposed, output_padding,
                  groups, bias, padding_mode, device=None, dtype=None):
         if padding_mode != 'zeros':
-            raise ValueError('Only "zeros" padding mode is supported for {}'.format(self.__class__.__name__))
+            raise ValueError(f'Only "zeros" padding mode is supported for {self.__class__.__name__}')
         factory_kwargs = {'device': device, 'dtype': dtype}
         # Subclasses of _ConvNd need to call _init rather than __init__. See
         # discussion on PR #49702
@@ -610,7 +610,7 @@ class _ConvTransposeNd(_ConvNd):
         return res
 
     @classmethod
-    def from_float(cls, mod):
+    def from_float(cls, mod, use_precomputed_fake_quant=False):
         r"""Creates a quantized module from a float module or qparams_dict.
         Args:
             mod (Module): a float module, either produced by torch.ao.quantization

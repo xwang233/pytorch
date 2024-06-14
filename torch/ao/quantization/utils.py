@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 """
 Utils shared by different modes of quantization (eager/graph)
 """
@@ -121,6 +122,25 @@ def check_node(node, modules):
     return is_call_function, is_call_method, is_call_module
 
 def get_combined_dict(default_dict, additional_dict):
+    """
+    Combines two dictionaries.
+
+    This function takes two dictionaries as input and returns a new dictionary
+    that contains all the key-value pairs from both input dictionaries.
+    If there are any duplicate keys in the `additional_dict`, the values
+    from the `additional_dict` will overwrite those in the `default_dict`.
+    Args:
+        default_dict (dict): The main dictionary that will be used as the base
+        additional_dict (dict): The dictionary used to update `default_dict`
+
+    Returns:
+        dict: The resulting dictionary
+    Example:
+        >>> x = dict(a=1, b=1)
+        >>> y = dict(b=2, c=3)
+        >>> get_combined_dict(x, y)
+        {'a': 1, 'b': 2, 'c': 3}
+    """
     d = default_dict.copy()
     d.update(additional_dict)
     return d
@@ -147,8 +167,14 @@ def to_underlying_dtype(qdtype):
         torch.qint32: torch.int32,
         torch.quint4x2: torch.uint8,
         torch.quint2x4: torch.uint8,
+        torch.uint8: torch.uint8,
+        torch.int8: torch.int8,
+        torch.int16: torch.int16,
+        torch.int32: torch.int32,
+        torch.float8_e5m2: torch.float8_e5m2,
+        torch.float8_e4m3fn: torch.float8_e4m3fn,
     }
-    assert qdtype in DTYPE_MAPPING, "Unsupported dtype: " + qdtype
+    assert qdtype in DTYPE_MAPPING, "Unsupported dtype: " + str(qdtype)
     return DTYPE_MAPPING[qdtype]
 
 def get_qparam_dict(observer_or_fake_quant):
@@ -201,7 +227,7 @@ def get_swapped_custom_module_class(custom_module, custom_module_class_mapping, 
     quant_type = get_quant_type(qconfig)
     class_mapping = custom_module_class_mapping.get(quant_type, {})
     assert type(custom_module) in class_mapping, "did not find corresponding observed " \
-        "module class for {} in mapping: {}".format(type(custom_module), class_mapping)
+        f"module class for {type(custom_module)} in mapping: {class_mapping}"
     return class_mapping[type(custom_module)]
 
 def activation_dtype(qconfig):
@@ -219,7 +245,18 @@ def activation_is_statically_quantized(qconfig):
     quantized or not, this includes quantizing to quint8, qint8 and qint32 and float16
     """
     return (
-        activation_dtype(qconfig) in [torch.quint8, torch.qint8, torch.qint32, torch.float16]
+        activation_dtype(qconfig) in [
+            torch.quint8,
+            torch.qint8,
+            torch.qint32,
+            torch.float16,
+            torch.uint8,
+            torch.int8,
+            torch.int16,
+            torch.int32,
+            torch.float8_e5m2,
+            torch.float8_e4m3fn,
+        ]
         and (not activation_is_dynamically_quantized(qconfig))
     )
 
@@ -236,25 +273,36 @@ def activation_is_int8_quantized(qconfig):
     """ Given a qconfig, decide if the activation needs to be
     quantized to int8 or not, this includes quantizing to quint8, qint8
     """
-    return activation_dtype(qconfig) in [torch.quint8, torch.qint8]
+    return activation_dtype(qconfig) in [torch.quint8, torch.qint8, torch.uint8, torch.int8]
 
 def activation_is_int32_quantized(qconfig):
     """ Given a qconfig, decide if the activation needs to be
     quantized to int32 or not
     """
-    return activation_dtype(qconfig) == torch.qint32
+    return activation_dtype(qconfig) in [torch.qint32, torch.int32]
 
 def weight_is_quantized(qconfig):
     """ Given a qconfig, decide if the weight needs to be
     quantized or not
     """
-    return weight_dtype(qconfig) in [torch.quint8, torch.qint8, torch.float16, torch.quint4x2]
+    return weight_dtype(qconfig) in [
+        torch.quint8,
+        torch.qint8,
+        torch.float16,
+        torch.quint4x2,
+        torch.uint8,
+        torch.int8,
+        torch.int16,
+        torch.int32,
+        torch.float8_e5m2,
+        torch.float8_e4m3fn,
+    ]
 
 def weight_is_statically_quantized(qconfig):
     """ Given a qconfig, decide if the weight needs to be statically
     quantized or not
     """
-    return weight_dtype(qconfig) in [torch.quint8, torch.qint8]
+    return weight_dtype(qconfig) in [torch.quint8, torch.qint8, torch.uint8, torch.int8]
 
 def op_is_int8_dynamically_quantized(qconfig) -> bool:
     """ Given a qconfig, returns True if this op is using int8 dynamic
@@ -263,9 +311,9 @@ def op_is_int8_dynamically_quantized(qconfig) -> bool:
     activation_dtype, weight_dtype, activation_is_dynamic = \
         get_qconfig_dtypes(qconfig)
     return (
-        activation_dtype is torch.quint8 and
+        activation_dtype in [torch.quint8, torch.uint8] and
         # for now, the lines below assume fbgemm or qnnpack
-        weight_dtype is torch.qint8 and
+        weight_dtype in [torch.qint8, torch.int8] and
         activation_is_dynamic
     )
 
@@ -283,7 +331,18 @@ def get_quant_type(qconfig):
     assert qconfig is not None
     activation = qconfig.activation()
     weight = qconfig.weight()
-    static_dtypes = [torch.quint8, torch.qint8, torch.quint4x2, torch.qint32]
+    static_dtypes = [
+        torch.quint8,
+        torch.qint8,
+        torch.quint4x2,
+        torch.qint32,
+        torch.uint8,
+        torch.int8,
+        torch.int16,
+        torch.int32,
+        torch.float8_e5m2,
+        torch.float8_e4m3fn
+    ]
     if weight.dtype in static_dtypes:
         if hasattr(activation, 'is_dynamic') and activation.is_dynamic:
             return QuantType.DYNAMIC
@@ -298,8 +357,8 @@ def get_quant_type(qconfig):
         elif activation.dtype == torch.float16:
             return QuantType.STATIC
 
-    raise Exception("Unrecognized dtype combination in get_quant_type: activation({}),"
-                    "weight({})".format(activation.dtype, weight.dtype))
+    raise Exception(f"Unrecognized dtype combination in get_quant_type: activation({activation.dtype}),"  # noqa: TRY002
+                    f"weight({weight.dtype})")
 
 def check_min_max_valid(min_val: torch.Tensor, max_val: torch.Tensor) -> bool:
     """ Checks if the given minimum and maximum values are valid, meaning that
@@ -321,13 +380,11 @@ def check_min_max_valid(min_val: torch.Tensor, max_val: torch.Tensor) -> bool:
 
             return False
 
-        assert min_val <= max_val, "min {} should be less than max {}".format(
-            min_val, max_val
-        )
+        assert min_val <= max_val, f"min {min_val} should be less than max {max_val}"
     else:
         assert torch.all(
             min_val <= max_val
-        ), "min {} should be less than max {}".format(min_val, max_val)
+        ), f"min {min_val} should be less than max {max_val}"
 
     return True
 
@@ -342,7 +399,7 @@ def calculate_qmin_qmax(quant_min: int, quant_max: int, has_customized_qrange: b
         # This initialization here is to be resolve TorchScript compilation issues and allow
         # using of refinement to decouple initial_qmin and initial_qmax from quantization range.
         # The actual values of initial_qmin and initial_qmax will be reset below.
-        if dtype == torch.qint32:
+        if dtype in [torch.qint32, torch.int32]:
             initial_quant_min, initial_quant_max = 0, 2**32 - 1
         else:
             initial_quant_min, initial_quant_max = 0, 255
@@ -356,11 +413,11 @@ def calculate_qmin_qmax(quant_min: int, quant_max: int, has_customized_qrange: b
             )
 
         qrange_len = initial_quant_max - initial_quant_min + 1
-        if dtype == torch.qint8:
+        if dtype in [torch.qint8, torch.int8]:
             assert (
                 0 < qrange_len <= 256
             ), "quantization range should be positive and not exceed the maximum bit range (=256)."
-        elif dtype == torch.qint32:
+        elif dtype in [torch.qint32, torch.int32]:
             assert (
                 0 < qrange_len <= 2**32
             ), "quantization range should be positive and not exceed the maximum bit range (=4294967296)."
@@ -368,17 +425,17 @@ def calculate_qmin_qmax(quant_min: int, quant_max: int, has_customized_qrange: b
             quant_min, quant_max = quant_min // 2, quant_max // 2
     else:
         # Fallback onto default 8-bit qmin and qmax calculation if dynamic range is not used.
-        if dtype == torch.qint8:
+        if dtype in [torch.qint8, torch.int8]:
             if reduce_range:
                 quant_min, quant_max = -64, 63
             else:
                 quant_min, quant_max = -128, 127
-        elif dtype == torch.quint8:
+        elif dtype in [torch.quint8, torch.uint8]:
             if reduce_range:
                 quant_min, quant_max = 0, 127
             else:
                 quant_min, quant_max = 0, 255
-        elif dtype == torch.qint32:
+        elif dtype in [torch.qint32, torch.int32]:
             quant_min, quant_max = -1 * (2 ** 31), (2 ** 31) - 1
         else:
             quant_min, quant_max = 0, 15
@@ -543,7 +600,7 @@ def determine_qparams(
         max_val_pos = torch.max(-min_val_neg, max_val_pos)
         scale = max_val_pos / (float(quant_max - quant_min) / 2)
         scale = torch.max(scale, eps)
-        if dtype == torch.uint8 or dtype == torch.quint8:
+        if dtype in [torch.uint8, torch.quint8]:
             if has_customized_qrange:
                 # When customized quantization range is used, down-rounded midpoint of the range is chosen.
                 zero_point = zero_point.new_full(
@@ -643,13 +700,34 @@ def get_fqn_to_example_inputs(
         return orig_module_call(self, *args, **kwargs)
 
     orig_module_call = torch.nn.Module.__call__
-    torch.nn.Module.__call__ = _patched_module_call
+    torch.nn.Module.__call__ = _patched_module_call  # type: ignore[method-assign]
     try:
         model(*example_inputs)
     finally:
         # restore the module call even if there is an exception
-        torch.nn.Module.__call__ = orig_module_call
+        torch.nn.Module.__call__ = orig_module_call  # type: ignore[method-assign]
     return fqn_to_example_inputs
+
+def _assert_and_get_unique_device(module: torch.nn.Module) -> Any:
+    """
+    Returns the unique device for a module, or None if no device is found.
+    Throws an error if multiple devices are detected.
+    """
+    devices = {p.device for p in module.parameters()} | \
+        {p.device for p in module.buffers()}
+    """
+    As a temp workaround for AIMP HHC publish we added CPU check.remove it later. T163614564
+    """
+    if {torch.device("cpu"), torch.device("meta")} == devices:
+        warnings.warn("Both 'meta' and 'cpu' are present in the list of devices. Module can have one device. We Select 'cpu'.")
+        devices = {torch.device("cpu")}
+    ""
+    assert len(devices) <= 1, (
+        "prepare only works with cpu or single-device CUDA modules, "
+        f"but got devices {devices}"
+    )
+    device = next(iter(devices)) if len(devices) > 0 else None
+    return device
 
 __all__ = [
     "NodePattern",

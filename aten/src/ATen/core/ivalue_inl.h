@@ -294,6 +294,7 @@ using Shared = c10::intrusive_ptr<T>;
 // string
 struct TORCH_API ConstantString final : c10::intrusive_ptr_target {
  private:
+   // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const std::string str_;
 
  public:
@@ -334,7 +335,7 @@ struct TORCH_API TupleElements {
     // Don't want to declare a std::array because the convenient
     // iteration and size members are a footgun in this case -- the
     // actual size of the array may be smaller than 3!
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays)
+    // NOLINTNEXTLINE(*c-arrays*)
     IValue elementsInline_[3];
   };
 
@@ -360,10 +361,10 @@ struct TORCH_API TupleElements {
     switch (inlineSize_) {
       case 3:
         new (&elementsInline_[2]) IValue(elements[2]);
-        C10_FALLTHROUGH;
+        [[fallthrough]];
       case 2:
         new (&elementsInline_[1]) IValue(elements[1]);
-        C10_FALLTHROUGH;
+        [[fallthrough]];
       case 1:
         new (&elementsInline_[0]) IValue(elements[0]);
         break;
@@ -656,7 +657,7 @@ struct TORCH_API TupleTypeFactory<TupleType> {
 
 template <>
 struct TORCH_API TupleTypeFactory<c10::DynamicType> {
-  static DynamicTypePtr create(std::vector<TypePtr> elemTypes);
+  static DynamicTypePtr create(const std::vector<TypePtr>& elemTypes);
   static DynamicTypePtr fallback(const Type&);
 };
 
@@ -846,6 +847,15 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
 
   friend c10::intrusive_ptr<Future>;
 
+  struct FutureCallback {
+    std::function<void(Future&)> callback;
+    bool uses_future; // whether the Future& passed in is actually used
+
+    template <typename T>
+    FutureCallback(T callback, bool uses_future)
+        : callback(std::move(callback)), uses_future(uses_future) {}
+  };
+
  public:
   Future(const Future&) = delete;
   Future(Future&&) = delete;
@@ -899,7 +909,7 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
   using WeakStorage = c10::weak_intrusive_ptr<c10::StorageImpl>;
   void markCompleted(
       IValue value,
-      c10::optional<std::vector<WeakStorage>> storages = c10::nullopt) {
+      std::optional<std::vector<WeakStorage>> storages = c10::nullopt) {
     // Start by performing all steps that can throw, before setting any field.
     // Do this before even acquiring the mutex, because extractStorages might
     // acquire the GIL, which could lead to a lock inversion with our mutex.
@@ -942,13 +952,13 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
       events_.push_back(std::move(event));
     }
 
-    std::vector<std::function<void(Future&)>> cbs;
+    std::vector<FutureCallback> cbs;
     cbs.swap(callbacks_);
     lock.unlock();
 
     finished_cv_.notify_all();
     for (auto& callback : cbs) {
-      invokeCallback(std::move(callback));
+      invokeCallback(std::move(callback.callback), callback.uses_future);
     }
   }
 
@@ -1023,19 +1033,18 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
    * this function will execute the callback immediately.
    */
   template <typename T>
-  void addCallback(T callback) {
-#if __cpp_lib_is_invocable >= 201703
+  void addCallback(T callback, bool uses_future = true) {
     static_assert(
         std::is_invocable_r<void, T, Future&>::value,
         "The callback must have signature void(Future&)");
-#endif
+
     std::unique_lock<std::mutex> lock(mutex_);
     if (completed()) {
       lock.unlock();
-      invokeCallback(std::move(callback));
+      invokeCallback(std::move(callback), uses_future);
       return;
     }
-    callbacks_.emplace_back(std::move(callback));
+    callbacks_.emplace_back(std::move(callback), uses_future);
   }
 
   /**
@@ -1046,19 +1055,18 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
   template <typename T>
   c10::intrusive_ptr<Future> then(T callback, TypePtr type) {
     using IValueWithStorages = std::tuple<IValue, std::vector<WeakStorage>>;
-#if __cpp_lib_is_invocable >= 201703
     static_assert(
-        guts::disjunction<
+        std::disjunction<
             std::is_invocable_r<IValue, T, Future&>,
             std::is_invocable_r<IValueWithStorages, T, Future&>>::value,
         "The callback must have signature IValue(Future&) or "
         "std::tuple<IValue, std::vector<Storage>>(Future&)");
-#endif
+
     auto childFut = createInstance(::std::move(type));
     addCallback([childFut,
                  cb = std::move(callback)](Future& parentFut) mutable {
       try {
-        if constexpr (::std::is_convertible_v<typename c10::invoke_result_t<T &&, Future&>, IValueWithStorages>) {
+        if constexpr (::std::is_convertible_v<typename std::invoke_result_t<T &&, Future&>, IValueWithStorages>) {
           auto [ivalue, storages] = cb(parentFut);
           childFut->markCompleted(::std::move(ivalue), ::std::move(storages));
         } else {
@@ -1073,11 +1081,10 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
 
   template <typename T>
   c10::intrusive_ptr<Future> thenAsync(T callback, TypePtr type) {
-#if __cpp_lib_is_invocable >= 201703
     static_assert(
         std::is_invocable_r<c10::intrusive_ptr<Future>, T, Future&>::value,
         "The callback must have signature c10::intrusive_ptr<Future>(Future&)");
-#endif
+
     auto childFut = createInstance(std::move(type));
     addCallback(
         [childFut, cb = std::move(callback)](Future& parentFut) mutable {
@@ -1132,7 +1139,7 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
       std::ostream& out,
       const Future& v);
 
-  TypePtr elementType() const {
+  const TypePtr& elementType() const {
     return type_;
   }
 
@@ -1153,24 +1160,27 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
   // set up before running the callback, as in, it will set up the CUDA streams,
   // synchronize them with the value, and so on (if needed).
   template<typename T>
-  void invokeCallback(T callback) {
-#if __cpp_lib_is_invocable >= 201703
+  void invokeCallback(T callback, bool uses_future) {
     static_assert(
         std::is_invocable_r<void, T, Future&>::value,
         "The callback must have signature void(Future&)");
-#endif
 
-    c10::OptionalDeviceGuard deviceGuard(currentDevice_);
+    // The synchronization performed below shouldn't be needed when the future
+    // is not used by the callback.
+    if (uses_future) {
+      c10::OptionalDeviceGuard deviceGuard(currentDevice_);
 
-    std::vector<c10::Stream> streams;
-    streams.reserve(devices_.size());
-    for (const c10::Device& device : devices_) {
-      streams.push_back(impl_.getStreamFromGlobalPool(device));
+      std::vector<c10::Stream> streams;
+      streams.reserve(devices_.size());
+      for (const c10::Device& device : devices_) {
+        streams.push_back(impl_.getStreamFromGlobalPool(device));
+      }
+      c10::MultiStreamGuard streamGuard(streams);
+      synchronizeWithCurrentStreams();
+      callback(*this);
+    } else {
+      callback(*this);
     }
-    c10::MultiStreamGuard streamGuard(streams);
-    synchronizeWithCurrentStreams();
-
-    callback(*this);
   }
 
   // This method should be called before this future's value is used, as it
@@ -1206,13 +1216,13 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
     completed_ = true;
     eptr_ = std::move(eptr);
 
-    std::vector<std::function<void(Future&)>> cbs;
+    std::vector<FutureCallback> cbs;
     cbs.swap(callbacks_);
     lock.unlock();
 
     finished_cv_.notify_all();
     for (auto& callback : cbs) {
-      invokeCallback(std::move(callback));
+      invokeCallback(std::move(callback.callback), callback.uses_future);
     }
   }
 
@@ -1353,11 +1363,12 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
 
   IValue value_; // when finished the value
   TypePtr type_;
-  std::vector<std::function<void(Future&)>> callbacks_;
+  std::vector<FutureCallback> callbacks_;
   std::exception_ptr eptr_;
 
   // An upcast pointer to a virtual class which allows us to manipulate events,
   // streams, ... in a generic way, without an explicit dependency on CUDA.
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const c10::impl::VirtualGuardImpl impl_;
 
   // The device that was current when markCompleted was called, which we'll
@@ -1381,6 +1392,7 @@ struct C10_EXPORT ivalue::Future final : c10::intrusive_ptr_target {
   // current when invoking a callback, thus allowing the callback to use devices
   // that the parent future didn't use. This field is set to the value provided
   // in the constructor and will be "inherited" by all child futures.
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const std::vector<c10::Device> devices_;
 };
 
@@ -1431,11 +1443,11 @@ struct C10_EXPORT ivalue::Await final : c10::intrusive_ptr_target {
       std::ostream& out,
       const Await& v);
 
-  TypePtr elementType() const {
+  const TypePtr& elementType() const {
     return elType_;
   }
 
-  TypePtr type() const {
+  const TypePtr& type() const {
     return type_;
   }
 
@@ -1459,11 +1471,11 @@ struct C10_EXPORT ivalue::Await final : c10::intrusive_ptr_target {
 // Input is a list of Futures with the same target type.
 // Output is a Future to the List of completed Futures.
 TORCH_API intrusive_ptr<ivalue::Future> collectAll(
-    c10::List<c10::intrusive_ptr<ivalue::Future>> srcs);
+    const c10::List<c10::intrusive_ptr<ivalue::Future>>& srcs);
 // Input is a List of Futures with the same target type.
 // Output is a Future that will be updated with a seen value.
 TORCH_API intrusive_ptr<ivalue::Future> collectAny(
-    c10::List<c10::intrusive_ptr<ivalue::Future>> srcs);
+    const c10::List<c10::intrusive_ptr<ivalue::Future>>& srcs);
 
 // User-defined object.
 struct C10_EXPORT ivalue::Object final : c10::intrusive_ptr_target {
@@ -1524,7 +1536,7 @@ struct C10_EXPORT ivalue::Object final : c10::intrusive_ptr_target {
 
   void unsafeRemoveSlot(size_t slot) {
     TORCH_CHECK(slot < slots_.size());
-    slots_.erase(slots_.begin() + slot);
+    slots_.erase(slots_.begin() + static_cast<std::ptrdiff_t>(slot));
   }
 
   /**
@@ -1573,9 +1585,12 @@ struct C10_EXPORT ivalue::Object final : c10::intrusive_ptr_target {
 
   c10::intrusive_ptr<Object> copy() const;
 
-  c10::intrusive_ptr<Object> deepcopy() const;
+  c10::intrusive_ptr<Object> deepcopy(
+      std::optional<at::Device> device = c10::nullopt) const;
 
-  c10::intrusive_ptr<Object> deepcopy(IValue::HashAliasedIValueMap& memo) const;
+  c10::intrusive_ptr<Object> deepcopy(
+      IValue::HashIdentityIValueMap& memo,
+      std::optional<at::Device> device = c10::nullopt) const;
 
   bool is_weak_compilation_ref() const {
     return !type_.holds_strong_ref();
@@ -1598,7 +1613,7 @@ struct ivalue::PyObjectHolder : c10::intrusive_ptr_target {
  public:
   virtual PyObject* getPyObject() = 0;
   virtual c10::InferredType tryToInferType() = 0;
-  virtual IValue toIValue(const TypePtr& type, c10::optional<int32_t> N = c10::nullopt) = 0;
+  virtual IValue toIValue(const TypePtr& type, std::optional<int32_t> N = c10::nullopt) = 0;
   virtual std::string toStr() = 0;
   virtual std::vector<at::Tensor> extractTensors() = 0;
 
@@ -1624,9 +1639,9 @@ struct ivalue::EnumHolder : c10::intrusive_ptr_target {
       std::ostream& out,
       const ivalue::EnumHolder& v);
 
-  TORCH_API const std::string qualifiedClassName() const;
+  TORCH_API const std::string& qualifiedClassName() const;
 
-  const std::string unqualifiedClassName() const;
+  const std::string& unqualifiedClassName() const;
 
   const std::string& name() const {
     return name_;
@@ -1654,8 +1669,8 @@ struct _guarded_unsigned_long_unique_dummy final {
   _guarded_unsigned_long_unique_dummy(int64_t){};
 };
 using _guarded_unsigned_long = std::conditional_t<
-    std::is_same<unsigned long, uint32_t>::value ||
-        std::is_same<unsigned long, uint64_t>::value,
+    std::is_same_v<unsigned long, uint32_t> ||
+        std::is_same_v<unsigned long, uint64_t>,
     _guarded_unsigned_long_unique_dummy,
     unsigned long>;
 
@@ -1894,7 +1909,7 @@ std::unordered_map<K, V> generic_to(
 }
 
 template <typename T>
-c10::optional<T> generic_to(IValue ivalue, _fake_type<c10::optional<T>>) {
+std::optional<T> generic_to(IValue ivalue, _fake_type<std::optional<T>>) {
   if (ivalue.isNone()) {
     return c10::nullopt;
   }
@@ -1915,11 +1930,11 @@ template <
     typename... Args,
     typename Indices = std::make_index_sequence<sizeof...(Args)>,
     std::enable_if_t<
-        !guts::disjunction<
+        !std::disjunction_v<
             std::is_lvalue_reference<Args>...,
-            guts::negation<std::is_constructible<IValue, Args>>...>::value,
+            std::negation<std::is_constructible<IValue, Args>>...>,
         std::nullptr_t> = nullptr>
-std::tuple<Args...> generic_to(IValue ivalue, _fake_type<std::tuple<Args...>>) {
+std::tuple<Args...> generic_to(const IValue& ivalue, _fake_type<std::tuple<Args...>>) {
   const auto& vals = ivalue.toTupleRef().elements();
   TORCH_CHECK(vals.size() == sizeof...(Args));
   return detail::generic_to_tuple_impl<std::tuple<Args...>>(vals, Indices{});
@@ -1931,11 +1946,11 @@ inline T IValue::to() && {
 }
 
 template <>
-inline c10::optional<c10::string_view> IValue::to() && {
+inline std::optional<c10::string_view> IValue::to() && {
   // In the default implementation, the IValue is destroyed with std::move.
   // But if the unboxed type is optional<string_view> we cannot destroy
   // the IValue.
-  return generic_to(*this, _fake_type<c10::optional<c10::string_view>>{});
+  return generic_to(*this, _fake_type<std::optional<c10::string_view>>{});
 }
 
 template <typename T>
@@ -2031,20 +2046,20 @@ inline std::vector<at::Tensor> IValue::toTensorVector() const {
   return createVectorFromList<at::Tensor>(
       static_cast<const c10::detail::ListImpl*>(payload.u.as_intrusive_ptr));
 }
-inline c10::List<c10::optional<at::Tensor>> IValue::toOptionalTensorList() && {
+inline c10::List<std::optional<at::Tensor>> IValue::toOptionalTensorList() && {
   AT_ASSERT(isOptionalTensorList(), "Expected OptionalTensorList but got ", tagKind());
-  return c10::List<c10::optional<at::Tensor>>(moveToIntrusivePtr<c10::detail::ListImpl>());
+  return c10::List<std::optional<at::Tensor>>(moveToIntrusivePtr<c10::detail::ListImpl>());
 }
-inline c10::List<c10::optional<at::Tensor>> IValue::toOptionalTensorList() const& {
+inline c10::List<std::optional<at::Tensor>> IValue::toOptionalTensorList() const& {
   AT_ASSERT(isOptionalTensorList(), "Expected OptionalTensorList but got ", tagKind());
-  return c10::List<c10::optional<at::Tensor>>(toIntrusivePtr<c10::detail::ListImpl>());
+  return c10::List<std::optional<at::Tensor>>(toIntrusivePtr<c10::detail::ListImpl>());
 }
-inline std::vector<c10::optional<at::Tensor>> IValue::toOptionalTensorVector() const {
+inline std::vector<std::optional<at::Tensor>> IValue::toOptionalTensorVector() const {
   AT_ASSERT(isOptionalTensorList(), "Expected OptionalTensorList but got ", tagKind());
   TORCH_INTERNAL_ASSERT_DEBUG_ONLY(
       payload.u.as_intrusive_ptr != c10::UndefinedTensorImpl::singleton(),
       "called toOptionalTensorVector on null intrusive_ptr IValue");
-  return createVectorFromList<c10::optional<at::Tensor>>(
+  return createVectorFromList<std::optional<at::Tensor>>(
       static_cast<const c10::detail::ListImpl*>(payload.u.as_intrusive_ptr));
 }
 inline c10::List<IValue> IValue::toList() && {
@@ -2095,9 +2110,9 @@ inline IValue::IValue(c10::intrusive_ptr<ivalue::Tuple> v)
 template <
     typename... Args,
     std::enable_if_t<
-        !guts::disjunction<
+        !std::disjunction_v<
             std::is_lvalue_reference<Args>...,
-            guts::negation<std::is_constructible<IValue, Args>>...>::value,
+            std::negation<std::is_constructible<IValue, Args>>...>,
         std::nullptr_t>>
 inline IValue::IValue(const std::tuple<Args...>& t)
     : IValue(c10::guts::apply(c10::ivalue::Tuple::create<const Args&...>, t)) {
@@ -2106,9 +2121,9 @@ inline IValue::IValue(const std::tuple<Args...>& t)
 template <
     typename... Args,
     std::enable_if_t<
-        !guts::disjunction<
+        !std::disjunction_v<
             std::is_lvalue_reference<Args>...,
-            guts::negation<std::is_constructible<IValue, Args>>...>::value,
+            std::negation<std::is_constructible<IValue, Args>>...>,
         std::nullptr_t>>
 inline IValue::IValue(std::tuple<Args...>&& t)
     : IValue(c10::guts::apply(c10::ivalue::Tuple::create<Args&&...>, std::move(t))) {
@@ -2164,6 +2179,23 @@ template <class T, IValue::enable_if_symint<T>>
 inline IValue::IValue(const std::vector<T>& v) : IValue() {
   *this = IValue(at::ArrayRef<T>(v));
 }
+template <class T, IValue::enable_if_symint<T>>
+inline IValue::IValue(std::vector<T>&& v) : IValue() {
+  auto vi = c10::asIntArrayRefSlowOpt(v);
+  if (vi.has_value()) {
+    // This list is entirely integers; ensure it is typed as
+    // an IntList so toIntList works
+    *this = IValue(*vi);
+  } else {
+    // This list has SymInts; type it as a SymInt
+    *this = IValue(impl::toList<c10::SymInt>(c10::List<c10::SymInt>()));
+    auto list = to<c10::List<c10::SymInt>>();
+    list.reserve(v.size());
+    for (auto&& e : std::move(v)) {
+      list.push_back(std::move(e));
+    }
+  }
+}
 template <class T, IValue::enable_if_list_is_ivalue_constructible<T>>
 inline IValue::IValue(const std::vector<T>& v) : IValue(c10::List<T>()) {
   auto list = to<c10::List<T>>();
@@ -2172,6 +2204,22 @@ inline IValue::IValue(const std::vector<T>& v) : IValue(c10::List<T>()) {
     list.push_back(e);
   }
 }
+
+template <class T, IValue::enable_if_list_is_ivalue_constructible<T>>
+inline IValue::IValue(std::vector<T>&& v) : IValue(c10::List<T>()) {
+  auto list = to<c10::List<T>>();
+  list.reserve(v.size());
+  if constexpr (std::is_same_v<T, bool>) {
+    for (auto e : v) {
+      list.push_back(e);
+    }
+  } else {
+    for (auto&& e : std::move(v)) {
+      list.push_back(std::move(e));
+    }
+  }
+}
+
 template <class T, IValue::enable_if_list_is_ivalue_constructible<T>>
 inline IValue::IValue(c10::OptionalArrayRef<T> v) : IValue() {
   if (v.has_value()) {
@@ -2226,7 +2274,7 @@ inline IValue::IValue(std::unordered_map<Key, Value> v)
 }
 
 template <class T, IValue::enable_if_ivalue_constructible<T>>
-inline IValue::IValue(c10::optional<T> v) : IValue() {
+inline IValue::IValue(std::optional<T> v) : IValue() {
   if (v.has_value()) {
     *this = IValue(std::move(*v));
   }
@@ -2259,7 +2307,7 @@ inline IValue IValue::make_capsule(
 
 template <
     typename T,
-    std::enable_if_t<std::is_base_of<torch::CustomClassHolder, T>::value, int>>
+    std::enable_if_t<std::is_base_of_v<torch::CustomClassHolder, T>, int>>
 IValue::IValue(c10::intrusive_ptr<T> custom_class) : tag(Tag::Object) {
   auto classType = []() {
     try {
@@ -2267,8 +2315,7 @@ IValue::IValue(c10::intrusive_ptr<T> custom_class) : tag(Tag::Object) {
     } catch (const c10::Error&) {
       throw c10::Error(
           "Trying to instantiate a class that isn't a registered custom class: " +
-          std::string(c10::util::get_fully_qualified_type_name<T>()),
-          "");
+          std::string(c10::util::get_fully_qualified_type_name<T>()));
     }
   }();
   auto ivalue_obj = c10::ivalue::Object::create(std::move(classType), /* numSlots */1);
@@ -2313,7 +2360,7 @@ inline const std::string& IValue::toStringRef() const {
              payload.u.as_intrusive_ptr)
       ->string();
 }
-inline c10::optional<std::reference_wrapper<const std::string>> IValue::
+inline std::optional<std::reference_wrapper<const std::string>> IValue::
     toOptionalStringRef() const {
   if (isNone()) {
     return c10::nullopt;

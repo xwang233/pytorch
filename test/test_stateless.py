@@ -131,6 +131,21 @@ class TestStatelessFunctionalAPI(TestCase):
         dp_module = torch.nn.DataParallel(module, [0, 1])
         self._run_call_with_mock_module(dp_module, functional_call, device='cuda', prefix='module')
 
+    @unittest.skipIf(not TEST_MULTIGPU, 'multi-GPU not supported')
+    @parametrize("functional_call", [
+        subtest(torch.func.functional_call, "torch_func"),
+        subtest(stateless.functional_call, "stateless")
+    ])
+    def test_functional_call_with_data_parallel_error(self, functional_call):
+        module = MockModule()
+        module.cuda()
+        dp_module = torch.nn.DataParallel(module, [0, 1])
+        with self.assertRaisesRegex(RuntimeError, r'used with nn.DataParallel module'):
+            functional_call(
+                dp_module,
+                {'module.weight': torch.zeros(5, device='cuda')},
+                (torch.ones(2, 5, device='cuda'),))
+
     @parametrize("functional_call", [
         subtest(torch.func.functional_call, "torch_func"),
         subtest(stateless.functional_call, "stateless")
@@ -238,9 +253,13 @@ class TestStatelessFunctionalAPI(TestCase):
         parameters = {'l1.parametrizations.weight.original': torch.nn.Parameter(torch.tensor([[1.0]])),
                       'l1.bias': torch.tensor([0.0]),
                       'buffer': torch.tensor([0.0])}
+
         with self.assertRaisesRegex(RuntimeError, "shapes cannot be multiplied"):
-            x = torch.rand((4, 5))  # to work, it should be of size (1, 1)
-            functional_call(module, parameters, x)  # this call will fail because x is the wrong size
+            @torch._dynamo.disable
+            def _error_case():
+                x = torch.rand((4, 5))  # to work, it should be of size (1, 1)
+                functional_call(module, parameters, x)  # this call will fail because x is the wrong size
+            _error_case()
 
         # verify that the spectral normalization is still applied
         self.assertTrue('l1.parametrizations.weight.original' in dict(module.named_parameters()))
@@ -882,7 +901,7 @@ exit(len(w))
         m = torch.nn.Linear(1, 1)
         params = dict(m.named_parameters())
         x = torch.randn(3, 1)
-        with self.assertWarnsRegex(UserWarning, "Please use torch.func.functional_call"):
+        with self.assertWarnsRegex(FutureWarning, "Please use `torch.func.functional_call`"):
             stateless.functional_call(m, params, x)
 
 class TestPythonOptimizeMode(TestCase):

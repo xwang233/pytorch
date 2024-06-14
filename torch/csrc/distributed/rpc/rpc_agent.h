@@ -36,7 +36,7 @@ using steady_clock_time_point =
 using TypeResolver =
     std::function<c10::StrongTypePtr(const c10::QualifiedName&)>;
 
-struct RpcBackendOptions {
+struct TORCH_API RpcBackendOptions {
   RpcBackendOptions()
       : RpcBackendOptions(kDefaultRpcTimeoutSeconds, kDefaultInitMethod) {}
 
@@ -170,7 +170,7 @@ class TORCH_API RpcAgent {
       RpcRetryOptions retryOptions = RpcRetryOptions());
 
   // Return a reference to the ``WorkerInfo`` of this RpcAgent.
-  // NB: not using ``c10::optional<const std::string&>`` here because we might
+  // NB: not using ``std::optional<const std::string&>`` here because we might
   // need to create a separate RPC API lib and avoid forcing all ``RpcAgent``
   // implementations to depend on libtorch.
   const WorkerInfo& getWorkerInfo() const;

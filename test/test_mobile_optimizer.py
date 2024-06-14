@@ -46,7 +46,7 @@ class TestOptimizer(TestCase):
 
         input_data = torch.rand((batch_size, input_channels, height, width))
         conv_weight = torch.rand((output_channels, input_channels_per_group, kernel_h, kernel_w))
-        conv_bias = torch.rand((output_channels))
+        conv_bias = torch.rand(output_channels)
         result = F.conv2d(input_data, conv_weight, conv_bias, strides, paddings, dilations, groups)
         weight_output_dim = 24
         linear_input_shape = result.shape[1]
@@ -56,9 +56,9 @@ class TestOptimizer(TestCase):
             def __init__(self):
                 super().__init__()
                 self.conv_weight = torch.nn.Parameter(torch.rand(conv_weight_shape))
-                self.conv_bias = torch.nn.Parameter(torch.rand((conv_bias_shape)))
+                self.conv_bias = torch.nn.Parameter(torch.rand(conv_bias_shape))
                 self.linear_weight = torch.nn.Parameter(torch.rand(linear_weight_shape))
-                self.linear_bias = torch.nn.Parameter(torch.rand((weight_output_dim)))
+                self.linear_bias = torch.nn.Parameter(torch.rand(weight_output_dim))
                 self.strides = strides
                 self.paddings = paddings
                 self.dilations = dilations
@@ -149,7 +149,7 @@ class TestOptimizer(TestCase):
         bn_scripted_module.eval()
 
         self.assertEqual(len(torch.jit.export_opnames(bn_scripted_module)), 11)
-        FileCheck().check_count("prim::CallMethod[name=\"forward\"]", 2, exactly=True) \
+        FileCheck().check_count('prim::CallMethod[name="forward"]', 2, exactly=True) \
                    .run(str(get_forward(bn_scripted_module._c).graph))
 
         optimization_blocklist_no_prepack = {MobileOptimizerType.INSERT_FOLD_PREPACK_OPS}
@@ -169,7 +169,7 @@ class TestOptimizer(TestCase):
             def __init__(self):
                 super().__init__()
                 self.linear_weight = torch.nn.Parameter(torch.rand(linear_weight_shape))
-                self.linear_bias = torch.nn.Parameter(torch.rand((weight_output_dim)))
+                self.linear_bias = torch.nn.Parameter(torch.rand(weight_output_dim))
 
             def forward(self, x):
                 o = F.linear(x, self.linear_weight, self.linear_bias)
@@ -186,7 +186,7 @@ class TestOptimizer(TestCase):
             def __init__(self):
                 super().__init__()
                 self.linear_weight = torch.nn.Parameter(torch.rand(linear_weight_shape))
-                self.linear_bias = torch.nn.Parameter(torch.rand((weight_output_dim)))
+                self.linear_bias = torch.nn.Parameter(torch.rand(weight_output_dim))
 
             def forward(self, x):
                 o = F.linear(x, self.linear_weight, self.linear_bias)
@@ -250,7 +250,7 @@ class TestOptimizer(TestCase):
         bn_no_forward_scripted_module.eval()
 
         self.assertEqual(len(torch.jit.export_opnames(bn_no_forward_scripted_module)), 11)
-        FileCheck().check_count("prim::CallMethod[name=\"forward\"]", 2, exactly=True) \
+        FileCheck().check_count('prim::CallMethod[name="forward"]', 2, exactly=True) \
                    .run(bn_no_forward_scripted_module.foo.graph)
 
         bn_fold_no_forward_scripted_module = optimize_for_mobile(bn_no_forward_scripted_module, preserved_methods=['foo'])
@@ -471,7 +471,7 @@ class TestOptimizer(TestCase):
             # basic case
 
             m, m_optim = _quant_script_and_optimize(Standalone())
-            FileCheck().check_not("Conv2d = prim::GetAttr[name=\"conv1\"]") \
+            FileCheck().check_not('Conv2d = prim::GetAttr[name="conv1"]') \
                        .check_count("__torch__.torch.classes.quantized.Conv2dPackedParamsBase = prim::Constant", 2, exactly=True) \
                        .run(m_optim.graph)
             self.assertFalse(hasattr(m_optim, "conv1"))
@@ -485,7 +485,7 @@ class TestOptimizer(TestCase):
             # generic case
 
             m, m_optim = _quant_script_and_optimize(Parent())
-            FileCheck().check_not("Conv2d = prim::GetAttr[name=\"conv1\"]") \
+            FileCheck().check_not('Conv2d = prim::GetAttr[name="conv1"]') \
                        .check_count("__torch__.torch.classes.quantized.Conv2dPackedParamsBase = prim::Constant", 2, exactly=True) \
                        .run(m_optim.graph)
             self.assertFalse(hasattr(m_optim, "conv1"))
@@ -582,7 +582,7 @@ class TestOptimizer(TestCase):
         self.assertTrue(
             cloned.qualified_name.startswith('__torch__.'),
             ("Expected the cloned module's name to start with the string "
-             "'__torch__.', but got: {0}").format(cloned.qualified_name),
+             f"'__torch__.', but got: {cloned.qualified_name}"),
         )
 
 

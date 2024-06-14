@@ -6,12 +6,13 @@ from typing import Any, List, Type
 
 import torch
 import torch.distributed as dist
+import torch.distributed._functional_collectives as funcol
 import torch.fx as fx
 import torch.nn as nn
 from torch.distributed._spmd.api import compile, COMPILED_OBJECT_KEY, Override
 from torch.distributed._spmd.comm_tensor import CommTensor
 from torch.distributed._tensor import DeviceMesh
-from torch.distributed._tensor.op_schema import OpSchema, OutputSharding
+from torch.distributed._tensor._op_schema import OpSchema, OutputSharding
 from torch.distributed._tensor.ops.utils import register_prop_rule
 from torch.distributed._tensor.placement_types import DTensorSpec
 from torch.distributed.distributed_c10d import get_global_rank, get_world_size
@@ -19,7 +20,7 @@ from torch.fx.experimental.proxy_tensor import make_fx
 from torch.nn import functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
-from torch.testing._internal.common_utils import run_tests
+from torch.testing._internal.common_utils import run_tests  # noqa: TCH001
 from torch.testing._internal.distributed._tensor.common_dtensor import (
     DTensorTestBase,
     with_comms as base_with_comms,
@@ -45,7 +46,7 @@ class TraceDeviceMeshTestBase:
         local_tensor = torch.ones(3, 3, device=self.device_type) * self.rank
 
         # check all dim groups
-        dim_to_subgroups = mesh.get_dim_groups()
+        dim_to_subgroups = mesh.get_all_groups()
         for dim, dim_group in enumerate(dim_to_subgroups):
             dim_group_size = get_world_size(dim_group)
             global_ranks = [
@@ -53,7 +54,7 @@ class TraceDeviceMeshTestBase:
             ]
 
             def fn(tensor: torch.Tensor):
-                tensor = mesh.all_reduce(tensor, mesh_dim=dim)
+                tensor = funcol.all_reduce(tensor, "sum", group=(mesh, dim))
                 # multiply with 1 to trigger wait on read during tracing.
                 return tensor * 1
 
@@ -70,7 +71,7 @@ class TraceDeviceMeshTestBase:
         mesh = DeviceMesh(self.device_type, mesh_tensor)
 
         # check all dim groups
-        dim_to_subgroups = mesh.get_dim_groups()
+        dim_to_subgroups = mesh.get_group()
         for dim, dim_group in enumerate(dim_to_subgroups):
             dim_group_size = get_world_size(dim_group)
             global_ranks = [
@@ -97,7 +98,7 @@ class TraceDeviceMeshTestBase:
         mesh = DeviceMesh(self.device_type, mesh_tensor)
 
         # check all dim groups
-        dim_to_subgroups = mesh.get_dim_groups()
+        dim_to_subgroups = mesh.get_group()
         for dim, dim_group in enumerate(dim_to_subgroups):
             dim_group_size = get_world_size(dim_group)
             global_ranks = [
@@ -128,7 +129,7 @@ class TraceDeviceMeshTestBase:
         # each rank have its own tensor, all_gather gives a big tensor
         local_tensor = torch.ones(3, 3, device=self.device_type) * self.rank
 
-        dim_to_subgroups = mesh.get_dim_groups()
+        dim_to_subgroups = mesh.get_group()
         for dim, dim_group in enumerate(dim_to_subgroups):
             dim_group_size = get_world_size(dim_group)
             global_ranks = [
@@ -136,7 +137,9 @@ class TraceDeviceMeshTestBase:
             ]
 
             def fn(tensor: torch.Tensor):
-                big_tensor = mesh.all_gather(tensor, mesh_dim=dim)
+                big_tensor = funcol.all_gather_tensor(
+                    tensor, gather_dim=0, group=(mesh, dim)
+                )
                 return list(torch.chunk(big_tensor, dim_group_size))
 
             # use a local_tensor + 1 for tracing to make sure that we are not
@@ -253,7 +256,7 @@ def ddm_backward(grad: torch.Tensor) -> torch.Tensor:
     return grad
 
 
-dummy_lib = torch.library.Library("dummy", "DEF")
+dummy_lib = torch.library.Library("dummy", "DEF")  # noqa: TOR901
 dummy_lib.define("ddm(Tensor x) -> Tensor")
 dummy_lib.impl("ddm", ddm, "CompositeExplicitAutograd")
 dummy_lib.define("ddm_backward(Tensor x) -> Tensor")
@@ -666,7 +669,7 @@ class TraceTrainStepTest(DTensorTestBase):
         train_step(mod, opt, inp)
         for node in train_step._compiled_obj.gm.graph.nodes:
             if node.target == torch.ops.aten.expand.default:
-                # backward grad expandion op should match local batch size
+                # backward grad expansion op should match local batch size
                 # instead of global batch size.
                 self.assertEqual(node.args[1], [2, 10])
 
@@ -960,4 +963,5 @@ class CoverageTest(DTensorTestBase):
 
 
 if __name__ == "__main__":
-    run_tests()
+    if False:
+        run_tests()

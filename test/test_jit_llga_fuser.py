@@ -127,7 +127,7 @@ def get_eltwise_fn(name):
     elif name == 'hardswish_':
         return torch.nn.Hardswish(inplace=True)
     else:
-        raise NameError('Eltwise function %s not found' % name)
+        raise NameError(f'Eltwise function {name} not found')
 
 
 @unittest.skipIf(IS_AVX512_UNSUPPORTED, "This test fails for BF16 on machines without AVX512.")
@@ -847,7 +847,7 @@ for model_name, enabled in [
         return test
 
     for dtype in [torch.bfloat16, torch.float32]:
-        setattr(TestModel, 'test_vision_%s_%s' % (model_name, str(dtype).split("torch.")[1]), _wrapper(model_name, dtype))
+        setattr(TestModel, 'test_vision_{}_{}'.format(model_name, str(dtype).split("torch.")[1]), _wrapper(model_name, dtype))
 
 
 instantiate_device_type_tests(TestFusionPattern, globals())

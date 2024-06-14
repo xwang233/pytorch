@@ -1,3 +1,5 @@
+# mypy: ignore-errors
+
 import os
 import re
 import sys
@@ -111,7 +113,7 @@ def check_file(filename):
         return 0
     if should_exclude_file(filename):
         return 0
-    with open(filename, "r") as fo:
+    with open(filename) as fo:
         contents = fo.read()
         unsafeCount = check_code_for_cuda_kernel_launches(contents, filename)
     return unsafeCount

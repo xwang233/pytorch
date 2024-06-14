@@ -136,7 +136,7 @@ ExprHandle promoteIntegerToDefaultType(const ExprHandle& e) {
 
 ExprHandle demoteOutput(
     const ExprHandle& e,
-    const c10::optional<ScalarType> type) {
+    const std::optional<ScalarType> type) {
   if (!type.has_value()) {
     return e;
   }
@@ -160,12 +160,12 @@ ExprHandle demoteOutput(
   return e;
 }
 
-c10::optional<TensorInfo> getTensorInfo(BufHandle b) {
+std::optional<TensorInfo> getTensorInfo(BufHandle b) {
   std::vector<int64_t> dims;
   for (auto dim : b.dims()) {
     auto val = intValue(dim.node());
     if (!val) {
-      return c10::nullopt;
+      return std::nullopt;
     }
     dims.push_back(*val);
   }
@@ -249,7 +249,7 @@ std::vector<ExprHandle> broadcastShapes(
 }
 
 std::vector<ExprHandle> valueShape(const ArgValue& v) {
-  if (auto b = c10::get_if<tensorexpr::BufHandle>(&v)) {
+  if (auto b = std::get_if<tensorexpr::BufHandle>(&v)) {
     return b->dims();
   }
   return {};
@@ -258,14 +258,14 @@ std::vector<ExprHandle> valueShape(const ArgValue& v) {
 ExprHandle tensorOrConstant(
     const ArgValue& v,
     const std::vector<ExprHandle>& axes) {
-  if (auto b = c10::get_if<BufHandle>(&v)) {
+  if (auto b = std::get_if<BufHandle>(&v)) {
     return broadcast(*b, axes);
   }
   return constant(v);
 }
 
 ExprHandle scalarOrConstant(const ArgValue& v) {
-  if (auto vh = c10::get_if<VarHandle>(&v)) {
+  if (auto vh = std::get_if<VarHandle>(&v)) {
     return *vh;
   }
   return constant(v);
@@ -276,15 +276,15 @@ ExprHandle broadcast(BufHandle b, const std::vector<ExprHandle>& axes) {
 }
 
 ExprHandle constant(const ArgValue& v) {
-  if (auto s = c10::get_if<tensorexpr::VarHandle>(&v)) {
+  if (auto s = std::get_if<tensorexpr::VarHandle>(&v)) {
     return *s;
-  } else if (auto d = c10::get_if<double>(&v)) {
+  } else if (auto d = std::get_if<double>(&v)) {
     return DoubleImm::make(*d);
-  } else if (auto i = c10::get_if<int64_t>(&v)) {
+  } else if (auto i = std::get_if<int64_t>(&v)) {
     return LongImm::make(*i);
-  } else if (auto b = c10::get_if<bool>(&v)) {
+  } else if (auto b = std::get_if<bool>(&v)) {
     return BoolImm::make(*b);
-  } else if (c10::get_if<ArgNone>(&v)) {
+  } else if (std::get_if<ArgNone>(&v)) {
     // This is just a placeholder so we don't throw.  None-handling
     // is operator-specific and should be handled properly in
     // the operator-specific lowering code.
@@ -321,16 +321,16 @@ Tensor computeChunk(
     const std::vector<ArgValue>& inputs,
     const std::vector<ExprHandle>& outputShape,
     const std::vector<ExprHandle>& outputStrides,
-    const c10::optional<ScalarType>& outputType,
+    const std::optional<ScalarType>& outputType,
     at::Device device) {
   return Compute(
       "prim_constantchunk",
       outputShape,
       [inputs](const std::vector<VarHandle>& axes) {
-        const auto& b = c10::get<BufHandle>(inputs[0]);
-        int64_t chunkIdx = c10::get<int64_t>(inputs[1]);
-        int64_t dim = c10::get<int64_t>(inputs[2]);
-        int64_t chunks = c10::get<int64_t>(inputs[3]);
+        const auto& b = std::get<BufHandle>(inputs[0]);
+        int64_t chunkIdx = std::get<int64_t>(inputs[1]);
+        int64_t dim = std::get<int64_t>(inputs[2]);
+        int64_t chunks = std::get<int64_t>(inputs[3]);
         std::vector<ExprHandle> indices(axes.begin(), axes.end());
 
         auto norm_dim = normalizeAndCheckIndex(dim, indices.size());
@@ -355,9 +355,9 @@ Tensor computeTranspose(
     const std::vector<ArgValue>& inputs,
     const std::vector<ExprHandle>& outputShape,
     const std::vector<ExprHandle>& outputStrides,
-    const c10::optional<ScalarType>& outputType,
+    const std::optional<ScalarType>& outputType,
     at::Device device) {
-  auto A = c10::get<BufHandle>(inputs[0]);
+  auto A = std::get<BufHandle>(inputs[0]);
   // Trivial case of 0-dim and 1-dim tensors: transpose is just a copy
   if (A.ndim() <= 1) {
     return Compute(
@@ -369,8 +369,8 @@ Tensor computeTranspose(
         });
   }
   // Usual case where transpose actually swaps dimensions
-  auto start_dim = at::maybe_wrap_dim(c10::get<int64_t>(inputs[1]), A.ndim());
-  auto to_dim = at::maybe_wrap_dim(c10::get<int64_t>(inputs[2]), A.ndim());
+  auto start_dim = at::maybe_wrap_dim(std::get<int64_t>(inputs[1]), A.ndim());
+  auto to_dim = at::maybe_wrap_dim(std::get<int64_t>(inputs[2]), A.ndim());
   return Compute(
       "aten_transpose", outputShape, [&](std::vector<VarHandle> axes) {
         std::swap(axes[start_dim], axes[to_dim]);
@@ -382,9 +382,9 @@ Tensor computeExpand(
     const std::vector<ArgValue>& inputs,
     const std::vector<ExprHandle>& outputShape,
     const std::vector<ExprHandle>& outputStrides,
-    const c10::optional<ScalarType>& outputType,
+    const std::optional<ScalarType>& outputType,
     at::Device device) {
-  auto A = c10::get<BufHandle>(inputs[0]);
+  auto A = std::get<BufHandle>(inputs[0]);
   return Compute(
       "aten_expand", outputShape, [&](const std::vector<VarHandle>& axes) {
         std::vector<ExprHandle> indices(axes.begin(), axes.end());
@@ -396,9 +396,9 @@ Tensor computeReshape(
     const std::vector<ArgValue>& inputs,
     const std::vector<ExprHandle>& outputShape,
     const std::vector<ExprHandle>& outputStrides,
-    const c10::optional<ScalarType>& outputType,
+    const std::optional<ScalarType>& outputType,
     at::Device device) {
-  auto A = c10::get<BufHandle>(inputs[0]);
+  auto A = std::get<BufHandle>(inputs[0]);
   if (A.ndim() == 0) {
     return Compute(
         "aten_view", outputShape, [&](const std::vector<VarHandle>& axes) {
@@ -464,7 +464,7 @@ Tensor computeFlatten(
     const std::vector<ArgValue>& inputs,
     const std::vector<ExprHandle>& outputShape,
     const std::vector<ExprHandle>& outputStrides,
-    const c10::optional<ScalarType>& outputType,
+    const std::optional<ScalarType>& outputType,
     at::Device device) {
   std::vector<int64_t> outputShapeVec;
   for (const auto dim : c10::irange(outputShape.size())) {
@@ -513,7 +513,7 @@ static Tensor computeCatWoConditionals(
     const std::vector<ExprHandle>& outputShape,
     const std::vector<ExprHandle>& outputStrides) {
   // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
-  auto input_list = c10::get<BufList>(inputs[0]);
+  auto input_list = std::get<BufList>(inputs[0]);
   auto arg_dim = inputs[1];
   auto cat_info = processCatList(input_list);
   ScalarType high_type = cat_info.first;
@@ -547,7 +547,7 @@ static Tensor computeCatWoConditionals(
         output_buf, alloc<tensorexpr::Block>(std::vector<StmtPtr>({})));
   }
 
-  int64_t concat_dim = c10::get<int64_t>(arg_dim);
+  int64_t concat_dim = std::get<int64_t>(arg_dim);
   auto norm_concat_dim = normalizeAndCheckIndex(concat_dim, outputShape.size());
 
   auto loop_order_fn = [&](const BufPtr& buf_) {
@@ -576,7 +576,7 @@ static Tensor computeCatWoConditionals(
     std::vector<ExprPtr> store_indices(dims.size());
     for (int64_t i = 0; i < static_cast<int64_t>(dims.size()); ++i) {
       for_vars[i] = alloc<Var>(
-          "i" + c10::to_string(inp_pos) + "_" + c10::to_string(i),
+          "i" + std::to_string(inp_pos) + "_" + std::to_string(i),
           dims[i].dtype());
       load_indices[i] = for_vars[i];
       if (i == norm_concat_dim) {
@@ -622,13 +622,13 @@ Tensor computeCat(
     const std::vector<ArgValue>& inputs,
     const std::vector<ExprHandle>& outputShape,
     const std::vector<ExprHandle>& outputStrides,
-    const c10::optional<ScalarType>& outputType,
+    const std::optional<ScalarType>& outputType,
     at::Device device) {
   if (device == at::kCPU && getCatWoConditionals()) {
     return computeCatWoConditionals(inputs, outputShape, outputStrides);
   }
   // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
-  auto inputList = c10::get<BufList>(inputs[0]);
+  auto inputList = std::get<BufList>(inputs[0]);
   auto argDim = inputs[1];
   auto catInfo = processCatList(inputList);
   ScalarType highType = catInfo.first;
@@ -642,7 +642,7 @@ Tensor computeCat(
           return ExprHandle(0);
         }
 
-        int64_t dim_ = c10::get<int64_t>(argDim);
+        int64_t dim_ = std::get<int64_t>(argDim);
         auto dim = normalizeAndCheckIndex(dim_, axes.size());
         // Promote input types.
         // Note that we need to consider all inputs, including empty - they
@@ -685,7 +685,7 @@ Tensor computeEmbedding(
     const std::vector<ArgValue>& inputs,
     const std::vector<ExprHandle>& outputShape,
     const std::vector<ExprHandle>& outputStrides,
-    const c10::optional<ScalarType>& outputType,
+    const std::optional<ScalarType>& outputType,
     at::Device device) {
   Dtype dtype = kFloat;
   if (outputType) {
@@ -693,8 +693,8 @@ Tensor computeEmbedding(
   }
 
   BufHandle ResultBuf("emb", outputShape, dtype);
-  const BufHandle& w = c10::get<BufHandle>(inputs[0]);
-  const BufHandle& indices = c10::get<BufHandle>(inputs[1]);
+  const BufHandle& w = std::get<BufHandle>(inputs[0]);
+  const BufHandle& indices = std::get<BufHandle>(inputs[1]);
 
   StmtPtr s =
       ExternalCall::make(ResultBuf, "nnc_aten_embedding", {w, indices}, {});

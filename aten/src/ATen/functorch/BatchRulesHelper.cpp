@@ -7,7 +7,7 @@
 #include <ATen/functorch/BatchRulesHelper.h>
 #include <ATen/WrapDimUtils.h>
 
-namespace at { namespace functorch {
+namespace at::functorch {
 
 Tensor moveBatchDimToFront(const Tensor& tensor, optional<int64_t> maybe_batch_dim) {
   if (!maybe_batch_dim.has_value()) {
@@ -76,11 +76,11 @@ Tensor maybePadToLogicalRank(const Tensor& tensor, optional<int64_t> has_bdim, i
   if (tensor_logical_rank >= logical_rank) {
     return tensor;
   }
-  VmapDimVector new_sizes(tensor.sizes().begin(), tensor.sizes().end());
+  VmapSymDimVector new_sizes(tensor.sym_sizes().begin(), tensor.sym_sizes().end());
   for (int64_t i = 0; i < logical_rank - tensor_logical_rank; i++) {
     new_sizes.insert(new_sizes.begin() + 1, 1);
   }
-  return tensor.view(new_sizes);
+  return tensor.view_symint(SymIntArrayRef{new_sizes.begin(), new_sizes.end()});
 }
 
 void check_randomness(RandomnessType randomness, bool any_tensor_batched) {
@@ -118,11 +118,9 @@ Tensor reshape_dim_outof(int64_t src, int64_t size1, const Tensor& x) {
     // NOTE: 0 % 0 leads to FPE
     TORCH_INTERNAL_ASSERT(shape[src] % size1 == 0);
   }
-  int64_t size2;
   // split any size out of `0`-sized dim
-  if (shape[src] == 0) {
-    size2 = 0;
-  } else {
+  int64_t size2 = 0;
+  if (shape[src] != 0) {
     size2 = shape[src] / size1;
   }
   shape[src] = size1;
@@ -130,7 +128,7 @@ Tensor reshape_dim_outof(int64_t src, int64_t size1, const Tensor& x) {
   return at::reshape(x, shape);
 }
 
-Tensor reshape_dim_outof_symint(int64_t src, c10::SymInt size1, const Tensor& x) {
+Tensor reshape_dim_outof_symint(int64_t src, const c10::SymInt& size1, const Tensor& x) {
   src = maybe_wrap_dim(src, x.dim());
   c10::SymDimVector shape(x.sym_sizes().begin(), x.sym_sizes().end());
   if (shape[src] != 0) {
@@ -204,4 +202,4 @@ std::tuple<Tensor, Tensor> _binary_pointwise_helper(
   return std::make_tuple(tensor_, other_);
 }
 
-}}
+} // namespace at::functorch

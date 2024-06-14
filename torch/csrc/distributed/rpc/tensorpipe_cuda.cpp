@@ -7,8 +7,10 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 
+C10_DIAGNOSTIC_PUSH_AND_IGNORED_IF_DEFINED("-Wdeprecated")
 #include <tensorpipe/tensorpipe.h>
 #include <tensorpipe/tensorpipe_cuda.h>
+C10_DIAGNOSTIC_POP()
 
 namespace torch {
 namespace distributed {
@@ -72,7 +74,7 @@ C10_REGISTER_CREATOR(
 
 class TensorpipeCudaConverter : public TensorpipeDeviceTypeConverter {
  public:
-  c10::optional<std::vector<char>> prepareTensorForSending(
+  std::optional<std::vector<char>> prepareTensorForSending(
       const c10::Storage& storage,
       const std::vector<c10::Stream>& streams,
       tensorpipe::Message& message) const override {
@@ -92,11 +94,11 @@ class TensorpipeCudaConverter : public TensorpipeDeviceTypeConverter {
 
     message.tensors.push_back(std::move(tensor));
 
-    return c10::nullopt;
+    return std::nullopt;
   }
 
   at::DataPtr allocateTensorForReceiving(
-      int deviceIndex,
+      c10::DeviceIndex deviceIndex,
       size_t length,
       const std::vector<c10::Stream>& streams,
       tensorpipe::Allocation& allocation) const override {

@@ -9,8 +9,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace torch {
-namespace autograd {
+namespace torch::autograd {
 
 using Variable = at::Tensor;
 struct Node;
@@ -27,7 +26,7 @@ class TORCH_API SavedVariable {
       bool is_output,
       bool is_inplace_on_view = false);
   SavedVariable(
-      const c10::optional<Variable>& variable,
+      const std::optional<Variable>& variable,
       bool is_output,
       bool is_inplace_on_view = false);
   SavedVariable(SavedVariable&&) = default;
@@ -47,6 +46,10 @@ class TORCH_API SavedVariable {
   void register_hooks(std::unique_ptr<SavedVariableHooks>&& hooks);
 
   void reset_data();
+
+  bool has_hooks() const {
+    return (bool)hooks_;
+  }
 
  private:
   // This field contains either:
@@ -115,5 +118,4 @@ class TORCH_API SavedVariable {
       std::unique_ptr<SavedVariableHooks>&& hooks,
       const Variable& data);
 };
-} // namespace autograd
-} // namespace torch
+} // namespace torch::autograd

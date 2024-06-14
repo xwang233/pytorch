@@ -2,11 +2,12 @@
 
 #include <c10/macros/Export.h>
 
-namespace at {
-namespace cpu {
+namespace at::cpu {
+
+TORCH_API bool is_cpu_support_avx2();
+TORCH_API bool is_cpu_support_avx512();
 
 // Detect if CPU support Vector Neural Network Instruction.
-TORCH_API bool is_cpu_support_vnni();
+TORCH_API bool is_cpu_support_avx512_vnni();
 
-} // namespace cpu
-} // namespace at
+} // namespace at::cpu

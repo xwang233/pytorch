@@ -4286,7 +4286,6 @@ def _model_run_helper(name_, args, num_forks):
         timeout = args.timeout
         if should_diff_branch(args):
             timeout *= 2
-        env = os.environ.copy()
         if args.ci and name_ in CI_PRESERVE_COMPILE_DEBUG:
             env["TORCH_COMPILE_DEBUG"] = "1"
         subprocess.check_call(

@@ -3487,6 +3487,11 @@ def parse_args(args=None):
         help="Measure speedup with TorchInductor",
     )
     group.add_argument(
+        "--thunder-jit",
+        action="store_true",
+        help="Measure speedup with Thunder.jit",
+    )
+    group.add_argument(
         "--quantization",
         choices=[
             "int8dynamic",
@@ -3692,6 +3697,9 @@ def run(runner, args, original_dir=None):
     if args.inductor:
         assert args.backend is None
         args.backend = "inductor"
+    if args.thunder_jit:
+        assert args.backend is None
+        args.backend = "thunder_jit"
     if args.quantization:
         assert args.backend is None
         args.backend = "torchao"
@@ -3888,6 +3896,12 @@ def run(runner, args, original_dir=None):
         )
         experiment = speedup_experiment
         output_filename = "inductor.csv"
+    elif args.thunder_jit:
+        import thunder
+
+        optimize_ctx = thunder.jit
+        experiment = speedup_experiment
+        output_filename = "thunder.csv"
     elif args.export:
         optimize_ctx = export
         experiment = speedup_experiment

@@ -625,12 +625,6 @@ decompose_mem_bound_mm: bool = False
 # In the common case, most inputs will be aligned.
 assume_aligned_inputs: bool = False
 
-# For the user-written Triton kernels compiled with the model, ignore the unsupported
-# arguments passed to the @triton.autotune in the user's code; this is unsafe, as
-# ignoring the unsupported args may lead to unexpected autotuning behavior: don't
-# set unless you know what you're doing.
-unsafe_ignore_unsupported_triton_autotune_args: bool = False
-
 
 # config specific to codegen/cpp.py
 class cpp:
@@ -702,6 +696,13 @@ class cpp:
         os.environ.get("TORCHINDUCTOR_CPP_ENABLE_FLOATING_POINT_CONTRACT_FLAG", "0")
         == "1"
     )
+
+    # Maximal allowed number of slices on K-dim for a GEMM kernel. This controls
+    # the maximal parallelism of K-slicing. Since K-slicing requires extra thread
+    # synchronization and buffers,  the maximal number of slices is limited to
+    # mitigate the sync overhead and memory usage.
+    # When set to 0, the number of slices is unlimited.
+    gemm_max_k_slices = int(os.environ.get("TORCHINDUCTOR_CPP_GEMM_MAX_K_SLICES", "1"))
 
 
 # config specific to codegen/triton.py

@@ -17,7 +17,7 @@ import torch._dynamo.config
 import torch.nn
 from torch._guards import TracingContext
 
-from .. import variables
+from .. import polyfill, variables
 from ..bytecode_transformation import create_call_function
 from ..create_parameter_op import do_not_convert_to_tracable_parameter
 from ..exc import ObservedException, unimplemented
@@ -96,7 +96,7 @@ class UserDefinedVariable(VariableTracker):
 
 
 class UserDefinedClassVariable(UserDefinedVariable):
-    def __init__(self, value, **kwargs):
+    def __init__(self, value, **kwargs) -> None:
         super().__init__(**kwargs)
         self.value = value
 
@@ -109,7 +109,7 @@ class UserDefinedClassVariable(UserDefinedVariable):
     def as_proxy(self):
         return self.value
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"UserDefinedClassVariable({self.value})"
 
     @staticmethod
@@ -522,13 +522,13 @@ class UserDefinedObjectVariable(UserDefinedVariable):
 
     _nonvar_fields = {"value", "value_type", *UserDefinedVariable._nonvar_fields}
 
-    def __init__(self, value, value_type=None, **kwargs):
+    def __init__(self, value, value_type=None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.value = value
         self.value_type = value_type or type(value)
         assert type(value) is self.value_type
 
-    def __str__(self):
+    def __str__(self) -> str:
         inner = self.value_type.__name__
         if inner in [
             "builtin_function_or_method",
@@ -539,7 +539,7 @@ class UserDefinedObjectVariable(UserDefinedVariable):
             inner = str(getattr(self.value, "__name__", None))
         return f"{self.__class__.__name__}({inner})"
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.value_type.__name__})"
 
     def python_type(self):
@@ -1021,6 +1021,9 @@ class UserDefinedObjectVariable(UserDefinedVariable):
                 else:
                     return trace_rules.lookup(func)(func)
 
+        if source and isinstance(self, variables.UnspecializedNNModuleVariable):
+            source = self._wrap_source(source)
+
         if subobj is not NO_SUCH_SUBOBJ and not is_wrapper_or_member_descriptor(subobj):
             if source:
                 return variables.LazyVariableTracker.create(subobj, source)
@@ -1098,7 +1101,7 @@ class SourcelessGraphModuleVariable(UserDefinedObjectVariable):
         self,
         value,
         **kwargs,
-    ):
+    ) -> None:
         super().__init__(value, **kwargs)
 
     def call_method(
@@ -1120,7 +1123,7 @@ class SourcelessGraphModuleVariable(UserDefinedObjectVariable):
 class WeakRefVariable(UserDefinedObjectVariable):
     _nonvar_fields = UserDefinedObjectVariable._nonvar_fields
 
-    def __init__(self, value, **kwargs):
+    def __init__(self, value, **kwargs) -> None:
         super().__init__(value, **kwargs)
 
     def call_function(
@@ -1149,7 +1152,7 @@ class KeyedJaggedTensorVariable(UserDefinedObjectVariable):
         mod = sys.modules.get("torchrec.sparse.jagged_tensor")
         return mod is not None and type(obj) is mod.KeyedJaggedTensor
 
-    def __init__(self, value, **kwargs):
+    def __init__(self, value, **kwargs) -> None:
         from torchrec.sparse.jagged_tensor import KeyedJaggedTensor
 
         assert type(value) is KeyedJaggedTensor
@@ -1181,7 +1184,7 @@ class RemovableHandleVariable(VariableTracker):
         # index of the registration in the side_effects owned register_hook/handle list, used during removal.
         idx=None,
         **kwargs,
-    ):
+    ) -> None:
         super().__init__(**kwargs)
         self.mutable_local = mutable_local
         self.idx = idx
@@ -1209,3 +1212,16 @@ class RemovableHandleVariable(VariableTracker):
 
     def python_type(self):
         return RemovableHandleClass
+
+
+class MutableMappingVariable(UserDefinedObjectVariable):
+    _nonvar_fields = UserDefinedObjectVariable._nonvar_fields
+
+    def __init__(self, value, **kwargs):
+        super().__init__(value, **kwargs)
+
+    def var_getattr(self, tx: "InstructionTranslator", name: str) -> "VariableTracker":
+        if name == "get" and type(self.value).get is collections.abc.Mapping.get:
+            return variables.UserMethodVariable(polyfill.mapping_get, self)
+        else:
+            return super().var_getattr(tx, name)

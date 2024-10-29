@@ -449,7 +449,7 @@ def output_signpost(data, args, suite, error=None):
         "performance",
         "tolerance",
     ]:
-        del filtered_args[k]
+        filtered_args.pop(k, None)
 
     event_name = "unknown"
     if args.accuracy:
